@@ -1,9 +1,11 @@
-import { Sparkles, Zap, Home as HomeIcon } from "lucide-react";
+import { Sparkles, Zap, Home as HomeIcon, History, FileText } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { icon: Sparkles, label: "Wizard", path: "/" },
+  { icon: History, label: "Histórico", path: "/historico" },
+  { icon: FileText, label: "Templates", path: "/templates" },
   { icon: Zap, label: "Quick", path: "/quick" },
   { icon: HomeIcon, label: "About", path: "/home" },
 ];

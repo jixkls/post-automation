@@ -8,12 +8,16 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import QuickGenerator from "./pages/QuickGenerator";
 import GuidedWizard from "./pages/GuidedWizard";
+import PostHistory from "./pages/PostHistory";
+import Templates from "./pages/Templates";
 
 function Router() {
   return (
     <AppLayout>
       <Switch>
         <Route path={""} component={GuidedWizard} />
+        <Route path={"/historico"} component={PostHistory} />
+        <Route path={"/templates"} component={Templates} />
         <Route path={"/quick"} component={QuickGenerator} />
         <Route path={"/home"} component={Home} />
         <Route path={"/404"} component={NotFound} />

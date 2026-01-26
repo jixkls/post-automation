@@ -1,9 +1,21 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Progress } from "@/components/ui/progress";
+import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download, AlertCircle, RefreshCw, X, Save, FileText, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+
+interface BatchResultItem {
+  index: number;
+  caption: string;
+  imagePrompt: string;
+  imageUrl?: string;
+  status: "pending" | "generating" | "done" | "error";
+  error?: string;
+}
 
 const STYLES = [
   { id: "minimalist", label: "Minimalista", desc: "Limpo e elegante" },
@@ -49,8 +61,12 @@ const ASPECT_RATIOS = {
   ],
 };
 
+type WizardStep = "topic" | "product" | "platform" | "aspect" | "style" | "tone" | "goal" | "batch" | "result";
+
+const STEPS: WizardStep[] = ["topic", "product", "platform", "aspect", "style", "tone", "goal", "batch", "result"];
+
 export default function GuidedWizard() {
-  const [step, setStep] = useState<"topic" | "product" | "platform" | "aspect" | "style" | "tone" | "goal" | "result">("topic");
+  const [step, setStep] = useState<WizardStep>("topic");
   const [topic, setTopic] = useState("");
   const [productImage, setProductImage] = useState<string>("");
   const [platform, setPlatform] = useState<"instagram" | "facebook" | "twitter" | "linkedin">("instagram");
@@ -65,6 +81,24 @@ export default function GuidedWizard() {
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Batch config
+  const [batchQuantity, setBatchQuantity] = useState(1);
+  const [useSameModel, setUseSameModel] = useState(false);
+  const [modelDescription, setModelDescription] = useState("");
+
+  // Batch results
+  const [batchResults, setBatchResults] = useState<BatchResultItem[]>([]);
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+  const [batchCancelled, setBatchCancelled] = useState(false);
+
+  // Template state
+  const [showTemplateDropdown, setShowTemplateDropdown] = useState(false);
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templateDescription, setTemplateDescription] = useState("");
+  const [isSavingPost, setIsSavingPost] = useState(false);
 
   const generatePostMutation = trpc.gemini.generatePost.useMutation({
     onSuccess: (data) => {
@@ -93,6 +127,60 @@ export default function GuidedWizard() {
     },
     onError: () => {
       toast.error("Erro ao gerar imagem");
+    },
+  });
+
+  const generateBatchPostsMutation = trpc.gemini.generateBatchPosts.useMutation();
+
+  // Template queries and mutations
+  const templatesQuery = trpc.templates.list.useQuery(undefined, {
+    enabled: true,
+  });
+  const createTemplateMutation = trpc.templates.create.useMutation({
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success("Template salvo!");
+        setShowSaveTemplateModal(false);
+        setTemplateName("");
+        setTemplateDescription("");
+        templatesQuery.refetch();
+      } else {
+        toast.error(data.error || "Erro ao salvar template");
+      }
+    },
+    onError: () => {
+      toast.error("Erro ao salvar template");
+    },
+  });
+  const incrementUseCountMutation = trpc.templates.incrementUseCount.useMutation();
+
+  // Post mutations
+  const savePostMutation = trpc.posts.savePost.useMutation({
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success("Post salvo!");
+      } else {
+        toast.error(data.error || "Erro ao salvar post");
+      }
+      setIsSavingPost(false);
+    },
+    onError: () => {
+      toast.error("Erro ao salvar post");
+      setIsSavingPost(false);
+    },
+  });
+  const saveBatchMutation = trpc.posts.saveBatch.useMutation({
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success(`${data.postIds?.length || 0} posts salvos!`);
+      } else {
+        toast.error(data.error || "Erro ao salvar posts");
+      }
+      setIsSavingPost(false);
+    },
+    onError: () => {
+      toast.error("Erro ao salvar posts");
+      setIsSavingPost(false);
     },
   });
 
@@ -150,9 +238,39 @@ export default function GuidedWizard() {
       toast.error("Escolha um objetivo");
       return;
     }
+    if (step === "batch" && useSameModel && !modelDescription.trim()) {
+      toast.error("Descreva a pessoa para manter consistência");
+      return;
+    }
 
-    if (step === "goal") {
-      generatePostMutation.mutate({
+    if (step === "batch") {
+      // Start batch generation
+      generateBatch();
+    } else {
+      const currentIndex = STEPS.indexOf(step);
+      if (currentIndex < STEPS.length - 1) {
+        setStep(STEPS[currentIndex + 1]);
+      }
+    }
+  };
+
+  const handleBack = () => {
+    const currentIndex = STEPS.indexOf(step);
+    if (currentIndex > 0) {
+      setStep(STEPS[currentIndex - 1]);
+    }
+  };
+
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const generateBatch = async () => {
+    setIsBatchGenerating(true);
+    setBatchCancelled(false);
+    setStep("result");
+
+    try {
+      // 1. Get all captions/prompts at once
+      const batchData = await generateBatchPostsMutation.mutateAsync({
         topic,
         platform,
         aspectRatio,
@@ -160,40 +278,144 @@ export default function GuidedWizard() {
         tone,
         goal,
         productImageUrl: productImage,
+        quantity: batchQuantity,
+        useSameModel,
+        modelDescription: useSameModel ? modelDescription : undefined,
       });
-    } else {
-      const steps: Array<"topic" | "product" | "platform" | "aspect" | "style" | "tone" | "goal" | "result"> = [
-        "topic",
-        "product",
-        "platform",
-        "aspect",
-        "style",
-        "tone",
-        "goal",
-        "result",
-      ];
-      const currentIndex = steps.indexOf(step);
-      if (currentIndex < steps.length - 1) {
-        setStep(steps[currentIndex + 1]);
+
+      if (!batchData.success || !batchData.items) {
+        toast.error("Erro ao gerar posts");
+        setIsBatchGenerating(false);
+        return;
       }
+
+      // Initialize batch results with pending status
+      const initialResults: BatchResultItem[] = batchData.items.map((item) => ({
+        index: item.index,
+        caption: item.caption,
+        imagePrompt: item.imagePrompt,
+        status: "pending" as const,
+      }));
+      setBatchResults(initialResults);
+
+      // 2. Generate images one by one with 2s delay between
+      for (let i = 0; i < batchData.items.length; i++) {
+        // Check if cancelled
+        if (batchCancelled) {
+          break;
+        }
+
+        setCurrentBatchIndex(i);
+
+        // Update status to generating
+        setBatchResults(prev => prev.map((item, idx) =>
+          idx === i ? { ...item, status: "generating" as const } : item
+        ));
+
+        try {
+          const imageResult = await generateImageMutation.mutateAsync({
+            prompt: batchData.items[i].imagePrompt,
+            aspectRatio,
+            productImageUrl: productImage,
+          });
+
+          if (imageResult.success && imageResult.imageUrl) {
+            setBatchResults(prev => prev.map((item, idx) =>
+              idx === i ? { ...item, status: "done" as const, imageUrl: imageResult.imageUrl } : item
+            ));
+          } else {
+            setBatchResults(prev => prev.map((item, idx) =>
+              idx === i ? { ...item, status: "error" as const, error: "Falha ao gerar imagem" } : item
+            ));
+          }
+        } catch (error) {
+          setBatchResults(prev => prev.map((item, idx) =>
+            idx === i ? { ...item, status: "error" as const, error: error instanceof Error ? error.message : "Erro desconhecido" } : item
+          ));
+        }
+
+        // Rate limit delay between generations (except for last item)
+        if (i < batchData.items.length - 1 && !batchCancelled) {
+          await delay(2000);
+        }
+      }
+
+      toast.success("Geração em lote concluída!");
+    } catch (error) {
+      toast.error("Erro ao gerar posts em lote");
+    }
+
+    setIsBatchGenerating(false);
+  };
+
+  const handleCancelBatch = () => {
+    setBatchCancelled(true);
+    toast.info("Geração cancelada");
+  };
+
+  const handleRetryItem = async (index: number) => {
+    const item = batchResults[index];
+    if (!item) return;
+
+    setBatchResults(prev => prev.map((r, idx) =>
+      idx === index ? { ...r, status: "generating" as const } : r
+    ));
+
+    try {
+      const imageResult = await generateImageMutation.mutateAsync({
+        prompt: item.imagePrompt,
+        aspectRatio,
+        productImageUrl: productImage,
+      });
+
+      if (imageResult.success && imageResult.imageUrl) {
+        setBatchResults(prev => prev.map((r, idx) =>
+          idx === index ? { ...r, status: "done" as const, imageUrl: imageResult.imageUrl, error: undefined } : r
+        ));
+        toast.success("Imagem regenerada!");
+      } else {
+        setBatchResults(prev => prev.map((r, idx) =>
+          idx === index ? { ...r, status: "error" as const, error: "Falha ao gerar imagem" } : r
+        ));
+      }
+    } catch (error) {
+      setBatchResults(prev => prev.map((r, idx) =>
+        idx === index ? { ...r, status: "error" as const, error: error instanceof Error ? error.message : "Erro desconhecido" } : r
+      ));
     }
   };
 
-  const handleBack = () => {
-    const steps: Array<"topic" | "product" | "platform" | "aspect" | "style" | "tone" | "goal" | "result"> = [
-      "topic",
-      "product",
-      "platform",
-      "aspect",
-      "style",
-      "tone",
-      "goal",
-      "result",
-    ];
-    const currentIndex = steps.indexOf(step);
-    if (currentIndex > 0) {
-      setStep(steps[currentIndex - 1]);
+  const handleDownloadAll = async () => {
+    const successfulItems = batchResults.filter(item => item.status === "done" && item.imageUrl);
+    if (successfulItems.length === 0) {
+      toast.error("Nenhuma imagem para baixar");
+      return;
     }
+
+    toast.info(`Baixando ${successfulItems.length} imagens...`);
+
+    for (let i = 0; i < successfulItems.length; i++) {
+      const item = successfulItems[i];
+      if (!item.imageUrl) continue;
+
+      try {
+        const response = await fetch(item.imageUrl);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `autopost-${platform}-batch-${item.index + 1}-${Date.now()}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        await delay(500); // Small delay between downloads
+      } catch (error) {
+        console.error(`Error downloading image ${i + 1}:`, error);
+      }
+    }
+
+    toast.success("Download concluído!");
   };
 
   const handleGenerateImage = () => {
@@ -220,6 +442,14 @@ export default function GuidedWizard() {
     setGeneratedImageUrl(null);
     setCopiedCaption(false);
     setCopiedPrompt(false);
+    // Reset batch state
+    setBatchQuantity(1);
+    setUseSameModel(false);
+    setModelDescription("");
+    setBatchResults([]);
+    setCurrentBatchIndex(0);
+    setIsBatchGenerating(false);
+    setBatchCancelled(false);
   };
 
   const copyToClipboard = (text: string, setSetter: (value: boolean) => void) => {
@@ -248,7 +478,81 @@ export default function GuidedWizard() {
     }
   };
 
-  const progressPercentage = (["topic", "product", "platform", "aspect", "style", "tone", "goal", "result"].indexOf(step) + 1) / 8 * 100;
+  const handleLoadTemplate = (template: NonNullable<typeof templatesQuery.data>["templates"][0]) => {
+    setPlatform(template.platform);
+    setAspectRatio(template.aspectRatio || "");
+    setStyle(template.style || "");
+    setTone(template.tone || "");
+    setGoal(template.goal || "");
+    setBatchQuantity(template.defaultBatchQuantity || 1);
+    setUseSameModel(template.useSameModel || false);
+    setModelDescription(template.modelDescription || "");
+    setShowTemplateDropdown(false);
+    incrementUseCountMutation.mutate({ id: template.id });
+    toast.success(`Template "${template.name}" carregado!`);
+  };
+
+  const handleSaveTemplate = () => {
+    if (!templateName.trim()) {
+      toast.error("Digite um nome para o template");
+      return;
+    }
+    createTemplateMutation.mutate({
+      name: templateName,
+      description: templateDescription || undefined,
+      platform,
+      aspectRatio: aspectRatio || undefined,
+      style: style || undefined,
+      tone: tone || undefined,
+      goal: goal || undefined,
+      defaultBatchQuantity: batchQuantity,
+      useSameModel,
+      modelDescription: modelDescription || undefined,
+    });
+  };
+
+  const handleSavePost = () => {
+    setIsSavingPost(true);
+    if (batchResults.length > 0) {
+      // Save batch
+      const items = batchResults
+        .filter((r) => r.status === "done" || r.caption)
+        .map((r, idx) => ({
+          caption: r.caption,
+          imagePrompt: r.imagePrompt,
+          imageUrl: r.imageUrl,
+          batchIndex: idx,
+        }));
+
+      saveBatchMutation.mutate({
+        topic,
+        platform,
+        aspectRatio: aspectRatio || undefined,
+        style: style || undefined,
+        tone: tone || undefined,
+        goal: goal || undefined,
+        productImageUrl: productImage || undefined,
+        items,
+      });
+    } else {
+      // Save single post
+      savePostMutation.mutate({
+        topic,
+        platform,
+        aspectRatio: aspectRatio || undefined,
+        style: style || undefined,
+        tone: tone || undefined,
+        goal: goal || undefined,
+        caption,
+        imagePrompt: imagePrompt || undefined,
+        imageUrl: generatedImageUrl || undefined,
+        productImageUrl: productImage || undefined,
+        status: generatedImageUrl ? "ready" : "draft",
+      });
+    }
+  };
+
+  const progressPercentage = (STEPS.indexOf(step) + 1) / STEPS.length * 100;
 
   return (
     <div className="p-4">
@@ -268,7 +572,7 @@ export default function GuidedWizard() {
             />
           </div>
           <p className="text-xs text-muted-foreground mt-2 text-center">
-            Passo {["topic", "product", "platform", "aspect", "style", "tone", "goal", "result"].indexOf(step) + 1} de 8
+            Passo {STEPS.indexOf(step) + 1} de {STEPS.length}
           </p>
         </div>
 
@@ -281,6 +585,40 @@ export default function GuidedWizard() {
                 <h2 className="text-2xl font-bold mb-2">Qual é o tema do post?</h2>
                 <p className="text-muted-foreground mb-4">Descreva sobre o que você quer falar</p>
               </div>
+
+              {/* Template Dropdown */}
+              {templatesQuery.data?.templates && templatesQuery.data.templates.length > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowTemplateDropdown(!showTemplateDropdown)}
+                    className="w-full px-4 py-3 rounded-lg border border-border bg-secondary/30 hover:bg-secondary/50 flex items-center justify-between transition"
+                  >
+                    <span className="flex items-center gap-2 text-muted-foreground">
+                      <FileText className="w-4 h-4" />
+                      Carregar Template
+                    </span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showTemplateDropdown ? "rotate-180" : ""}`} />
+                  </button>
+                  {showTemplateDropdown && (
+                    <div className="absolute z-10 w-full mt-2 py-2 bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                      {templatesQuery.data.templates.map((template) => (
+                        <button
+                          key={template.id}
+                          onClick={() => handleLoadTemplate(template)}
+                          className="w-full px-4 py-2 text-left hover:bg-secondary/50 transition"
+                        >
+                          <div className="font-medium">{template.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {template.platform} - {template.style} - {template.tone}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <input
                 type="text"
                 placeholder="Ex: Novo produto de café, promoção de verão, dica de produtividade..."
@@ -455,137 +793,494 @@ export default function GuidedWizard() {
                   </button>
                 ))}
               </div>
+
+              {/* Save as Template Button */}
+              {goal && (
+                <button
+                  type="button"
+                  onClick={() => setShowSaveTemplateModal(true)}
+                  className="w-full px-4 py-3 rounded-lg border border-dashed border-border hover:border-primary/50 flex items-center justify-center gap-2 text-muted-foreground hover:text-foreground transition"
+                >
+                  <FileText className="w-4 h-4" />
+                  Salvar como Template
+                </button>
+              )}
             </div>
           )}
 
-          {/* Step 8: Result */}
-          {step === "result" && (
+          {/* Save Template Modal */}
+          {showSaveTemplateModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <div className="bg-background rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+                <h3 className="text-lg font-bold mb-4">Salvar Template</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Nome do Template</label>
+                    <input
+                      type="text"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      placeholder="Ex: Posts Instagram Promocionais"
+                      className="w-full px-4 py-2 rounded-lg border border-border bg-background focus:outline-none focus:border-primary transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Descrição (opcional)</label>
+                    <textarea
+                      value={templateDescription}
+                      onChange={(e) => setTemplateDescription(e.target.value)}
+                      placeholder="Descreva quando usar este template..."
+                      className="w-full px-4 py-2 rounded-lg border border-border bg-background focus:outline-none focus:border-primary transition resize-none h-20"
+                    />
+                  </div>
+                  <div className="bg-secondary/30 rounded-lg p-3 text-sm">
+                    <p className="font-medium mb-2">Configurações salvas:</p>
+                    <ul className="space-y-1 text-muted-foreground">
+                      <li>Plataforma: {platform}</li>
+                      {aspectRatio && <li>Proporção: {aspectRatio}</li>}
+                      {style && <li>Estilo: {STYLES.find(s => s.id === style)?.label}</li>}
+                      {tone && <li>Tom: {TONES.find(t => t.id === tone)?.label}</li>}
+                      {goal && <li>Objetivo: {GOALS.find(g => g.id === goal)?.label}</li>}
+                    </ul>
+                  </div>
+                </div>
+                <div className="flex gap-3 mt-6">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowSaveTemplateModal(false);
+                      setTemplateName("");
+                      setTemplateDescription("");
+                    }}
+                    className="flex-1"
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    onClick={handleSaveTemplate}
+                    disabled={createTemplateMutation.isPending}
+                    className="flex-1 gap-2"
+                  >
+                    {createTemplateMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    Salvar
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 8: Batch */}
+          {step === "batch" && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">✨ Seu post está pronto!</h2>
-                <p className="text-muted-foreground mb-4">Copie e use onde quiser</p>
+                <h2 className="text-2xl font-bold mb-2">Quantas variações?</h2>
+                <p className="text-muted-foreground mb-4">Configure a geração em lote</p>
               </div>
 
-              {/* Product Image Preview */}
-              {productImage && (
-                <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
-                  <p className="text-xs text-muted-foreground mb-2">Imagem do produto</p>
-                  <img
-                    src={productImage}
-                    alt="Product"
-                    className="max-h-40 mx-auto object-contain"
+              {/* Quantity Slider */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-sm font-medium">Quantidade de variações</label>
+                  <span className="text-2xl font-bold text-primary">{batchQuantity}</span>
+                </div>
+                <Slider
+                  value={[batchQuantity]}
+                  onValueChange={(value) => setBatchQuantity(value[0])}
+                  min={1}
+                  max={10}
+                  step={1}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>1</span>
+                  <span>10</span>
+                </div>
+              </div>
+
+              {/* Same Model Toggle */}
+              <div className="bg-secondary/30 rounded-lg p-4 border border-border/50 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-sm font-medium">Usar o mesmo modelo</label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Mantém a mesma pessoa em todas as imagens
+                    </p>
+                  </div>
+                  <Switch
+                    checked={useSameModel}
+                    onCheckedChange={setUseSameModel}
                   />
                 </div>
-              )}
 
-              {/* Caption */}
-              <div className="bg-secondary/50 rounded-lg p-4 border border-border/50">
-                <div className="flex justify-between items-start mb-2">
-                  <h3 className="font-semibold text-sm">Caption</h3>
-                  <button
-                    onClick={() => copyToClipboard(caption, setCopiedCaption)}
-                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition"
-                  >
-                    {copiedCaption ? (
-                      <>
-                        <Check className="w-3 h-3" />
-                        Copiado!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3 h-3" />
-                        Copiar
-                      </>
-                    )}
-                  </button>
-                </div>
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{caption}</p>
+                {/* Model Description (conditional) */}
+                {useSameModel && (
+                  <div className="space-y-2 pt-2 border-t border-border/50">
+                    <label className="text-sm font-medium">Descrição da pessoa</label>
+                    <textarea
+                      value={modelDescription}
+                      onChange={(e) => setModelDescription(e.target.value)}
+                      placeholder="Descreva a pessoa: idade, cabelo, pele, roupa..."
+                      className="w-full px-4 py-3 rounded-lg border border-border bg-background focus:outline-none focus:border-primary transition resize-none h-24 text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Exemplo: Mulher jovem, cabelo castanho ondulado, pele clara, camisa branca
+                    </p>
+                  </div>
+                )}
               </div>
 
-              {/* Image Prompt */}
-              {imagePrompt && (
-                <div className="bg-slate-900 dark:bg-slate-950 rounded-lg p-4 border border-border/50">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-semibold text-sm text-slate-200">Prompt para Imagen</h3>
-                    <button
-                      onClick={() => copyToClipboard(imagePrompt, setCopiedPrompt)}
-                      className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+              {/* Summary */}
+              <div className="bg-primary/10 rounded-lg p-4 border border-primary/20">
+                <p className="text-sm">
+                  <span className="font-medium">Resumo:</span> Serão geradas{" "}
+                  <span className="font-bold text-primary">{batchQuantity}</span> variações
+                  {useSameModel && " com a mesma pessoa em todas as imagens"}.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Step 9: Result */}
+          {step === "result" && (
+            <div className="space-y-6">
+              {/* Batch Results */}
+              {batchResults.length > 0 ? (
+                <>
+                  <div>
+                    <h2 className="text-2xl font-bold mb-2">
+                      {isBatchGenerating ? "Gerando posts..." : "✨ Seus posts estão prontos!"}
+                    </h2>
+                    <p className="text-muted-foreground mb-4">
+                      {isBatchGenerating
+                        ? `Gerando ${currentBatchIndex + 1} de ${batchResults.length}...`
+                        : `${batchResults.filter(r => r.status === "done").length} de ${batchResults.length} imagens geradas`}
+                    </p>
+                  </div>
+
+                  {/* Progress during generation */}
+                  {isBatchGenerating && (
+                    <div className="space-y-3">
+                      <Progress value={((currentBatchIndex + 1) / batchResults.length) * 100} className="h-2" />
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-muted-foreground">
+                          Processando variação {currentBatchIndex + 1}...
+                        </span>
+                        <Button
+                          onClick={handleCancelBatch}
+                          variant="outline"
+                          size="sm"
+                          className="gap-1"
+                        >
+                          <X className="w-3 h-3" />
+                          Cancelar
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Status List during generation */}
+                  {isBatchGenerating && (
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {batchResults.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className={`flex items-center gap-3 p-2 rounded-lg text-sm ${
+                            item.status === "generating" ? "bg-primary/10" :
+                            item.status === "done" ? "bg-green-500/10" :
+                            item.status === "error" ? "bg-red-500/10" :
+                            "bg-secondary/30"
+                          }`}
+                        >
+                          {item.status === "pending" && <div className="w-4 h-4 rounded-full border-2 border-muted-foreground" />}
+                          {item.status === "generating" && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
+                          {item.status === "done" && <Check className="w-4 h-4 text-green-500" />}
+                          {item.status === "error" && <AlertCircle className="w-4 h-4 text-red-500" />}
+                          <span>Variação {idx + 1}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Results Grid after generation */}
+                  {!isBatchGenerating && (
+                    <>
+                      {/* Action Buttons */}
+                      <div className="flex gap-3">
+                        {batchResults.filter(r => r.status === "done").length > 1 && (
+                          <Button
+                            onClick={handleDownloadAll}
+                            variant="outline"
+                            className="flex-1 gap-2"
+                          >
+                            <Download className="w-4 h-4" />
+                            Baixar Todas ({batchResults.filter(r => r.status === "done").length})
+                          </Button>
+                        )}
+                        <Button
+                          onClick={handleSavePost}
+                          disabled={isSavingPost}
+                          className="flex-1 gap-2"
+                        >
+                          {isSavingPost ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Save className="w-4 h-4" />
+                          )}
+                          Salvar Posts
+                        </Button>
+                      </div>
+
+                      {/* Results Cards */}
+                      <div className="space-y-6">
+                        {batchResults.map((item, idx) => (
+                          <div key={idx} className="border border-border/50 rounded-lg overflow-hidden">
+                            <div className="bg-secondary/30 px-4 py-2 flex items-center justify-between">
+                              <span className="font-medium text-sm">Variação {idx + 1}</span>
+                              {item.status === "done" && <Check className="w-4 h-4 text-green-500" />}
+                              {item.status === "error" && <AlertCircle className="w-4 h-4 text-red-500" />}
+                            </div>
+
+                            {/* Image */}
+                            {item.status === "done" && item.imageUrl && (
+                              <div className="aspect-square bg-secondary/10">
+                                <img
+                                  src={item.imageUrl}
+                                  alt={`Generated post ${idx + 1}`}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            )}
+
+                            {/* Error State */}
+                            {item.status === "error" && (
+                              <div className="p-4 text-center">
+                                <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
+                                <p className="text-sm text-muted-foreground mb-3">{item.error || "Erro ao gerar imagem"}</p>
+                                <Button
+                                  onClick={() => handleRetryItem(idx)}
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1"
+                                  disabled={generateImageMutation.isPending}
+                                >
+                                  {generateImageMutation.isPending ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="w-3 h-3" />
+                                  )}
+                                  Tentar novamente
+                                </Button>
+                              </div>
+                            )}
+
+                            {/* Caption and Actions */}
+                            <div className="p-4 space-y-3">
+                              <div className="bg-secondary/50 rounded-lg p-3">
+                                <p className="text-sm leading-relaxed whitespace-pre-wrap">{item.caption}</p>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(item.caption);
+                                    toast.success("Caption copiada!");
+                                  }}
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-1 gap-1"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  Copiar Caption
+                                </Button>
+                                {item.status === "done" && item.imageUrl && (
+                                  <Button
+                                    onClick={async () => {
+                                      try {
+                                        const response = await fetch(item.imageUrl!);
+                                        const blob = await response.blob();
+                                        const url = window.URL.createObjectURL(blob);
+                                        const link = document.createElement("a");
+                                        link.href = url;
+                                        link.download = `autopost-${platform}-${idx + 1}-${Date.now()}.png`;
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        document.body.removeChild(link);
+                                        window.URL.revokeObjectURL(url);
+                                        toast.success("Imagem baixada!");
+                                      } catch (error) {
+                                        toast.error("Erro ao baixar imagem");
+                                      }
+                                    }}
+                                    variant="outline"
+                                    size="sm"
+                                    className="flex-1 gap-1"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    Baixar
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                /* Single Result (legacy/fallback) */
+                <>
+                  <div>
+                    <h2 className="text-2xl font-bold mb-2">✨ Seu post está pronto!</h2>
+                    <p className="text-muted-foreground mb-4">Copie e use onde quiser</p>
+                  </div>
+
+                  {/* Product Image Preview */}
+                  {productImage && (
+                    <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
+                      <p className="text-xs text-muted-foreground mb-2">Imagem do produto</p>
+                      <img
+                        src={productImage}
+                        alt="Product"
+                        className="max-h-40 mx-auto object-contain"
+                      />
+                    </div>
+                  )}
+
+                  {/* Caption */}
+                  <div className="bg-secondary/50 rounded-lg p-4 border border-border/50">
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-semibold text-sm">Caption</h3>
+                      <button
+                        onClick={() => copyToClipboard(caption, setCopiedCaption)}
+                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition"
+                      >
+                        {copiedCaption ? (
+                          <>
+                            <Check className="w-3 h-3" />
+                            Copiado!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            Copiar
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{caption}</p>
+                  </div>
+
+                  {/* Image Prompt */}
+                  {imagePrompt && (
+                    <div className="bg-slate-900 dark:bg-slate-950 rounded-lg p-4 border border-border/50">
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-semibold text-sm text-slate-200">Prompt para Imagen</h3>
+                        <button
+                          onClick={() => copyToClipboard(imagePrompt, setCopiedPrompt)}
+                          className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+                        >
+                          {copiedPrompt ? (
+                            <>
+                              <Check className="w-3 h-3" />
+                              Copiado!
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              Copiar
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-xs leading-relaxed text-green-400 font-mono">{imagePrompt}</p>
+                    </div>
+                  )}
+
+                  {/* Generated Image */}
+                  {generatedImageUrl && (
+                    <div className="space-y-3">
+                      <div className="rounded-lg overflow-hidden border border-border/50">
+                        <img src={generatedImageUrl} alt="Generated post image" className="w-full h-auto" />
+                      </div>
+                      <Button
+                        onClick={handleDownloadImage}
+                        variant="outline"
+                        className="w-full gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Baixar Imagem
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Generate Image Button */}
+                  {!generatedImageUrl && imagePrompt && (
+                    <Button
+                      onClick={handleGenerateImage}
+                      disabled={generateImageMutation.isPending}
+                      className="w-full gap-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70"
                     >
-                      {copiedPrompt ? (
+                      {generateImageMutation.isPending ? (
                         <>
-                          <Check className="w-3 h-3" />
-                          Copiado!
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Gerando imagem...
                         </>
                       ) : (
                         <>
-                          <Copy className="w-3 h-3" />
-                          Copiar
+                          <Sparkles className="w-4 h-4" />
+                          Gerar Imagem
                         </>
                       )}
-                    </button>
-                  </div>
-                  <p className="text-xs leading-relaxed text-green-400 font-mono">{imagePrompt}</p>
-                </div>
-              )}
-
-              {/* Generated Image */}
-              {generatedImageUrl && (
-                <div className="space-y-3">
-                  <div className="rounded-lg overflow-hidden border border-border/50">
-                    <img src={generatedImageUrl} alt="Generated post image" className="w-full h-auto" />
-                  </div>
-                  <Button
-                    onClick={handleDownloadImage}
-                    variant="outline"
-                    className="w-full gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    Baixar Imagem
-                  </Button>
-                </div>
-              )}
-
-              {/* Generate Image Button */}
-              {!generatedImageUrl && imagePrompt && (
-                <Button
-                  onClick={handleGenerateImage}
-                  disabled={generateImageMutation.isPending}
-                  className="w-full gap-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70"
-                >
-                  {generateImageMutation.isPending ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Gerando imagem...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4" />
-                      Gerar Imagem
-                    </>
+                    </Button>
                   )}
-                </Button>
-              )}
 
-              {/* Regenerate Image Button */}
-              {generatedImageUrl && imagePrompt && (
-                <Button
-                  onClick={handleGenerateImage}
-                  disabled={generateImageMutation.isPending}
-                  variant="outline"
-                  className="w-full gap-2"
-                >
-                  {generateImageMutation.isPending ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Regenerando...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4" />
-                      Gerar Variacao
-                    </>
+                  {/* Regenerate Image Button */}
+                  {generatedImageUrl && imagePrompt && (
+                    <Button
+                      onClick={handleGenerateImage}
+                      disabled={generateImageMutation.isPending}
+                      variant="outline"
+                      className="w-full gap-2"
+                    >
+                      {generateImageMutation.isPending ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Regenerando...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4" />
+                          Gerar Variacao
+                        </>
+                      )}
+                    </Button>
                   )}
-                </Button>
+
+                  {/* Save Single Post Button */}
+                  {caption && (
+                    <Button
+                      onClick={handleSavePost}
+                      disabled={isSavingPost}
+                      className="w-full gap-2"
+                    >
+                      {isSavingPost ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Salvando...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          Salvar Post
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </>
               )}
 
               {/* Summary */}
@@ -610,18 +1305,24 @@ export default function GuidedWizard() {
                   <span className="text-muted-foreground">Objetivo:</span>
                   <span className="font-semibold ml-2">{GOALS.find((g) => g.id === goal)?.label}</span>
                 </div>
+                {batchResults.length > 0 && (
+                  <div>
+                    <span className="text-muted-foreground">Variações:</span>
+                    <span className="font-semibold ml-2">{batchResults.length}</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {/* Navigation Buttons */}
           <div className="flex gap-3 mt-8">
-            {step !== "topic" && (
+            {step !== "topic" && step !== "result" && (
               <Button
                 onClick={handleBack}
                 variant="outline"
                 className="gap-2"
-                disabled={isLoading}
+                disabled={isLoading || isBatchGenerating}
               >
                 <ChevronLeft className="w-4 h-4" />
                 Voltar
@@ -632,19 +1333,19 @@ export default function GuidedWizard() {
               <Button
                 onClick={handleNext}
                 className="flex-1 gap-2 bg-primary hover:bg-primary/90"
-                disabled={isLoading}
+                disabled={isLoading || isBatchGenerating || generateBatchPostsMutation.isPending}
               >
-                {step === "goal" ? (
+                {step === "batch" ? (
                   <>
-                    {isLoading ? (
+                    {generateBatchPostsMutation.isPending ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        Gerando...
+                        Preparando...
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4" />
-                        Gerar Post
+                        Gerar {batchQuantity} {batchQuantity === 1 ? "Post" : "Posts"}
                       </>
                     )}
                   </>
@@ -657,7 +1358,7 @@ export default function GuidedWizard() {
               </Button>
             )}
 
-            {step === "result" && (
+            {step === "result" && !isBatchGenerating && (
               <Button
                 onClick={handleReset}
                 className="flex-1 gap-2 bg-primary hover:bg-primary/90"
