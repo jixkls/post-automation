@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 
@@ -226,6 +226,26 @@ export default function GuidedWizard() {
     navigator.clipboard.writeText(text);
     setSetter(true);
     setTimeout(() => setSetter(false), 2000);
+  };
+
+  const handleDownloadImage = async () => {
+    if (!generatedImageUrl) return;
+
+    try {
+      const response = await fetch(generatedImageUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autopost-${platform}-${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      toast.success("Imagem baixada!");
+    } catch (error) {
+      toast.error("Erro ao baixar imagem");
+    }
   };
 
   const progressPercentage = (["topic", "product", "platform", "aspect", "style", "tone", "goal", "result"].indexOf(step) + 1) / 8 * 100;
@@ -510,8 +530,18 @@ export default function GuidedWizard() {
 
               {/* Generated Image */}
               {generatedImageUrl && (
-                <div className="rounded-lg overflow-hidden border border-border/50">
-                  <img src={generatedImageUrl} alt="Generated post image" className="w-full h-auto" />
+                <div className="space-y-3">
+                  <div className="rounded-lg overflow-hidden border border-border/50">
+                    <img src={generatedImageUrl} alt="Generated post image" className="w-full h-auto" />
+                  </div>
+                  <Button
+                    onClick={handleDownloadImage}
+                    variant="outline"
+                    className="w-full gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Baixar Imagem
+                  </Button>
                 </div>
               )}
 
