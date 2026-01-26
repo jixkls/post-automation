@@ -231,14 +231,11 @@ export default function GuidedWizard() {
   const progressPercentage = (["topic", "product", "platform", "aspect", "style", "tone", "goal", "result"].indexOf(step) + 1) / 8 * 100;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 p-4">
+    <div className="p-4">
       <div className="max-w-2xl mx-auto">
-        {/* Header */}
+        {/* Page Title */}
         <div className="text-center mb-8">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <Sparkles className="w-8 h-8 text-primary" />
-            <h1 className="text-3xl font-bold">AutoPost</h1>
-          </div>
+          <h1 className="text-2xl font-bold mb-2">Assistente de Posts</h1>
           <p className="text-muted-foreground">Crie posts perfeitos passo a passo</p>
         </div>
 
@@ -641,11 +638,6 @@ export default function GuidedWizard() {
             )}
           </div>
         </Card>
-
-        {/* Footer */}
-        <div className="text-center mt-8 text-sm text-muted-foreground">
-          <p>Powered by Gemini AI</p>
-        </div>
       </div>
     </div>
   );
