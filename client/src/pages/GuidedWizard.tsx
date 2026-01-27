@@ -214,10 +214,7 @@ export default function GuidedWizard() {
       toast.error("Digite um tema");
       return;
     }
-    if (step === "product" && !productImage) {
-      toast.error("Carregue uma imagem");
-      return;
-    }
+    // Product step is optional - no validation needed
     if (step === "platform" && !platform) {
       toast.error("Escolha uma rede social");
       return;
@@ -629,12 +626,12 @@ export default function GuidedWizard() {
             </div>
           )}
 
-          {/* Step 2: Product Image */}
+          {/* Step 2: Product Image (Optional) */}
           {step === "product" && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Carregue a imagem do produto</h2>
-                <p className="text-muted-foreground mb-4">PNG ou JPG com fundo transparente (ideal)</p>
+                <h2 className="text-2xl font-bold mb-2">Imagem do produto (opcional)</h2>
+                <p className="text-muted-foreground mb-4">Adicione uma imagem ou pule para continuar</p>
               </div>
               <div
                 onClick={() => fileInputRef.current?.click()}
@@ -653,6 +650,12 @@ export default function GuidedWizard() {
                 <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
                   <p className="text-xs text-muted-foreground mb-2">Imagem carregada</p>
                   <img src={productImage} alt="Product" className="max-h-40 mx-auto object-contain" />
+                  <button
+                    onClick={() => setProductImage("")}
+                    className="mt-2 text-xs text-destructive hover:underline"
+                  >
+                    Remover imagem
+                  </button>
                 </div>
               )}
             </div>
@@ -947,16 +950,25 @@ export default function GuidedWizard() {
           {/* Step 9: Result */}
           {step === "result" && (
             <div className="space-y-6">
+              {/* Initial Loading State - Preparing captions */}
+              {isBatchGenerating && batchResults.length === 0 && (
+                <div className="text-center py-12">
+                  <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+                  <h2 className="text-2xl font-bold mb-2">Preparando posts...</h2>
+                  <p className="text-muted-foreground">Gerando captions e prompts de imagem</p>
+                </div>
+              )}
+
               {/* Batch Results */}
               {batchResults.length > 0 ? (
                 <>
                   <div>
                     <h2 className="text-2xl font-bold mb-2">
-                      {isBatchGenerating ? "Gerando posts..." : "✨ Seus posts estão prontos!"}
+                      {isBatchGenerating ? "Gerando imagens..." : "Seus posts estao prontos!"}
                     </h2>
                     <p className="text-muted-foreground mb-4">
                       {isBatchGenerating
-                        ? `Gerando ${currentBatchIndex + 1} de ${batchResults.length}...`
+                        ? `Gerando imagem ${currentBatchIndex + 1} de ${batchResults.length}...`
                         : `${batchResults.filter(r => r.status === "done").length} de ${batchResults.length} imagens geradas`}
                     </p>
                   </div>
@@ -1348,6 +1360,11 @@ export default function GuidedWizard() {
                         Gerar {batchQuantity} {batchQuantity === 1 ? "Post" : "Posts"}
                       </>
                     )}
+                  </>
+                ) : step === "product" && !productImage ? (
+                  <>
+                    Pular
+                    <ChevronRight className="w-4 h-4" />
                   </>
                 ) : (
                   <>

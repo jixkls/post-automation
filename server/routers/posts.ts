@@ -1,17 +1,20 @@
 import { z } from "zod";
 import { eq, desc, and, sql } from "drizzle-orm";
-import { protectedProcedure, router } from "../_core/trpc";
+import { publicProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import { posts, InsertPost } from "../../drizzle/schema";
 
 const platformSchema = z.enum(["instagram", "facebook", "twitter", "linkedin"]);
 const statusSchema = z.enum(["draft", "ready", "published", "failed"]);
 
+// Default user ID for non-authenticated usage
+const DEFAULT_USER_ID = 1;
+
 export const postsRouter = router({
   /**
    * Save a single post after generation
    */
-  savePost: protectedProcedure
+  savePost: publicProcedure
     .input(
       z.object({
         topic: z.string(),
@@ -34,8 +37,9 @@ export const postsRouter = router({
       }
 
       try {
+        const userId = ctx.user?.id ?? DEFAULT_USER_ID;
         const postData: InsertPost = {
-          userId: ctx.user.id,
+          userId,
           topic: input.topic,
           platform: input.platform,
           aspectRatio: input.aspectRatio ?? null,
@@ -68,7 +72,7 @@ export const postsRouter = router({
   /**
    * Save all posts from batch generation
    */
-  saveBatch: protectedProcedure
+  saveBatch: publicProcedure
     .input(
       z.object({
         topic: z.string(),
@@ -95,12 +99,13 @@ export const postsRouter = router({
       }
 
       try {
+        const userId = ctx.user?.id ?? DEFAULT_USER_ID;
         const batchId = crypto.randomUUID();
         const postIds: number[] = [];
 
         for (const item of input.items) {
           const postData: InsertPost = {
-            userId: ctx.user.id,
+            userId,
             topic: input.topic,
             platform: input.platform,
             aspectRatio: input.aspectRatio ?? null,
@@ -137,7 +142,7 @@ export const postsRouter = router({
   /**
    * Get paginated list of posts with optional filters
    */
-  listPosts: protectedProcedure
+  listPosts: publicProcedure
     .input(
       z.object({
         platform: platformSchema.optional(),
@@ -153,7 +158,8 @@ export const postsRouter = router({
       }
 
       try {
-        const conditions = [eq(posts.userId, ctx.user.id)];
+        const userId = ctx.user?.id ?? DEFAULT_USER_ID;
+        const conditions = [eq(posts.userId, userId)];
 
         if (input.platform) {
           conditions.push(eq(posts.platform, input.platform));
@@ -199,7 +205,7 @@ export const postsRouter = router({
   /**
    * Get a single post by ID
    */
-  getPost: protectedProcedure
+  getPost: publicProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
@@ -208,10 +214,11 @@ export const postsRouter = router({
       }
 
       try {
+        const userId = ctx.user?.id ?? DEFAULT_USER_ID;
         const result = await db
           .select()
           .from(posts)
-          .where(and(eq(posts.id, input.id), eq(posts.userId, ctx.user.id)))
+          .where(and(eq(posts.id, input.id), eq(posts.userId, userId)))
           .limit(1);
 
         if (result.length === 0) {
@@ -235,7 +242,7 @@ export const postsRouter = router({
   /**
    * Update a post (caption or status)
    */
-  updatePost: protectedProcedure
+  updatePost: publicProcedure
     .input(
       z.object({
         id: z.number(),
@@ -250,6 +257,7 @@ export const postsRouter = router({
       }
 
       try {
+        const userId = ctx.user?.id ?? DEFAULT_USER_ID;
         const updateData: Partial<InsertPost> = {};
         if (input.caption !== undefined) {
           updateData.caption = input.caption;
@@ -265,7 +273,7 @@ export const postsRouter = router({
         await db
           .update(posts)
           .set(updateData)
-          .where(and(eq(posts.id, input.id), eq(posts.userId, ctx.user.id)));
+          .where(and(eq(posts.id, input.id), eq(posts.userId, userId)));
 
         return { success: true };
       } catch (error) {
@@ -280,7 +288,7 @@ export const postsRouter = router({
   /**
    * Delete a post
    */
-  deletePost: protectedProcedure
+  deletePost: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -289,9 +297,10 @@ export const postsRouter = router({
       }
 
       try {
+        const userId = ctx.user?.id ?? DEFAULT_USER_ID;
         await db
           .delete(posts)
-          .where(and(eq(posts.id, input.id), eq(posts.userId, ctx.user.id)));
+          .where(and(eq(posts.id, input.id), eq(posts.userId, userId)));
 
         return { success: true };
       } catch (error) {

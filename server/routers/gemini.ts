@@ -315,6 +315,150 @@ Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text
       }
     }),
 
+  /**
+   * Generate batch posts with multiple variations
+   */
+  generateBatchPosts: publicProcedure
+    .input(
+      z.object({
+        topic: z.string(),
+        style: z.string(),
+        tone: z.string(),
+        goal: z.string(),
+        platform: platformSchema,
+        productImageUrl: z.string().optional(),
+        aspectRatio: z.string().optional(),
+        quantity: z.number().min(1).max(10),
+        useSameModel: z.boolean(),
+        modelDescription: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { topic, style, tone, goal, platform, aspectRatio, quantity, useSameModel, modelDescription } = input;
+
+      // Predefined variation contexts for character consistency
+      const variationContexts = [
+        "vista frontal, contato visual direto",
+        "vista tres-quartos da esquerda",
+        "vista tres-quartos da direita",
+        "close-up, expressao engajada",
+        "plano medio, pose natural",
+        "corpo inteiro, postura confiante",
+        "angulo de baixo para cima, impactante",
+        "angulo de cima para baixo, intimo",
+        "perfil lateral, olhando ao longe",
+        "vista de costas olhando por cima do ombro",
+      ];
+
+      try {
+        const items = [];
+
+        // Platform dimensions
+        const dimensions: Record<string, string> = {
+          instagram: "1080x1080 (square)",
+          facebook: "1200x628 (landscape)",
+          twitter: "1024x512 (landscape)",
+          linkedin: "1200x627 (landscape)",
+        };
+
+        const aspectRatioContext = aspectRatio
+          ? `Format: ${aspectRatio}. Optimize composition for this format.`
+          : "";
+
+        for (let i = 0; i < quantity; i++) {
+          // Generate caption with variation
+          const captionResponse = await invokeLLM({
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are a professional social media copywriter. Generate engaging, platform-optimized captions. Return only the caption text. Each caption should be unique and creative.",
+              },
+              {
+                role: "user",
+                content: `Create variation #${i + 1} of a ${tone} social media caption for ${platform} about: ${topic}
+
+Goal: ${goal}
+Style: ${style}
+
+This is variation ${i + 1} of ${quantity}. Make it different from previous variations while keeping the same theme.
+Make it engaging, include relevant hashtags and emojis. Keep it under 280 characters for Twitter. Return ONLY the caption text.`,
+              },
+            ],
+          });
+
+          // Build character consistency prefix if enabled
+          let characterConsistencyPrefix = "";
+          if (useSameModel && modelDescription) {
+            const variationContext = variationContexts[i % variationContexts.length];
+            characterConsistencyPrefix = `CONSISTENCIA DE PERSONAGEM: A imagem deve apresentar esta pessoa especifica:
+${modelDescription}
+
+Mantenha: tracos faciais, tom de pele, cor/estilo do cabelo, tipo fisico.
+Varie apenas: pose, angulo da camera, expressao, cenario.
+
+VARIACAO #${i + 1}: ${variationContext}
+
+`;
+          }
+
+          // Generate image prompt with variation
+          const imagePromptResponse = await invokeLLM({
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are an expert prompt engineer for AI image generation. Create detailed, optimized prompts for Gemini Imagen API. Return only the prompt text.",
+              },
+              {
+                role: "user",
+                content: `Create variation #${i + 1} of an optimized prompt for Gemini Imagen API for a ${platform} image (${dimensions[platform]}):
+
+Topic: ${topic}
+Visual Style: ${style}
+Tone: ${tone}
+Goal: ${goal}
+${aspectRatioContext}
+
+This is variation ${i + 1} of ${quantity}. Create a unique composition/scene while maintaining the same theme.
+Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text.`,
+              },
+            ],
+          });
+
+          const caption = extractLLMContent(captionResponse, `A ${style} post about ${topic}`);
+          let imagePrompt = extractLLMContent(imagePromptResponse, `A ${style} image of ${topic}`);
+
+          // Prepend character consistency instructions if enabled
+          if (characterConsistencyPrefix) {
+            imagePrompt = characterConsistencyPrefix + imagePrompt;
+          }
+
+          items.push({
+            index: i,
+            caption: caption.trim(),
+            imagePrompt: imagePrompt.trim(),
+          });
+        }
+
+        return {
+          success: true,
+          items,
+          platform,
+          aspectRatio: aspectRatio || "default",
+          useSameModel,
+        };
+      } catch (error) {
+        console.error("Error generating batch posts:", error);
+        return {
+          success: false,
+          items: [],
+          platform,
+          error: error instanceof Error ? error.message : "Failed to generate batch posts",
+        };
+      }
+    }),
+
   generateImageFromPrompt: publicProcedure
     .input(
       z.object({
