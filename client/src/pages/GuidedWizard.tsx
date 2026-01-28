@@ -4,9 +4,10 @@ import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download, AlertCircle, RefreshCw, X, Save, FileText, ChevronDown } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download, AlertCircle, RefreshCw, X, Save, FileText, ChevronDown, Type } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import TextOverlayEditor from "@/components/TextOverlayEditor";
 
 interface BatchResultItem {
   index: number;
@@ -99,6 +100,10 @@ export default function GuidedWizard() {
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
   const [isSavingPost, setIsSavingPost] = useState(false);
+
+  // Text overlay state
+  const [textOverlayIndex, setTextOverlayIndex] = useState<number | null>(null);
+  const [singleImageTextOverlay, setSingleImageTextOverlay] = useState(false);
 
   const generatePostMutation = trpc.gemini.generatePost.useMutation({
     onSuccess: (data) => {
@@ -547,6 +552,32 @@ export default function GuidedWizard() {
         status: generatedImageUrl ? "ready" : "draft",
       });
     }
+  };
+
+  // Text overlay handlers
+  const handleOpenTextOverlay = (index: number) => {
+    setTextOverlayIndex(index);
+  };
+
+  const handleSaveTextOverlay = (dataUrl: string) => {
+    if (textOverlayIndex !== null) {
+      // Update batch results with the new image
+      setBatchResults(prev => prev.map((item, idx) =>
+        idx === textOverlayIndex ? { ...item, imageUrl: dataUrl } : item
+      ));
+      toast.success("Texto adicionado!");
+    }
+    setTextOverlayIndex(null);
+  };
+
+  const handleOpenSingleTextOverlay = () => {
+    setSingleImageTextOverlay(true);
+  };
+
+  const handleSaveSingleTextOverlay = (dataUrl: string) => {
+    setGeneratedImageUrl(dataUrl);
+    setSingleImageTextOverlay(false);
+    toast.success("Texto adicionado!");
   };
 
   const progressPercentage = (STEPS.indexOf(step) + 1) / STEPS.length * 100;
@@ -1058,12 +1089,20 @@ export default function GuidedWizard() {
 
                             {/* Image */}
                             {item.status === "done" && item.imageUrl && (
-                              <div className="aspect-square bg-secondary/10">
+                              <div className="relative aspect-square bg-secondary/10 group">
                                 <img
                                   src={item.imageUrl}
                                   alt={`Generated post ${idx + 1}`}
                                   className="w-full h-full object-cover"
                                 />
+                                {/* Add Text Overlay Button */}
+                                <button
+                                  onClick={() => handleOpenTextOverlay(idx)}
+                                  className="absolute top-3 right-3 p-2 rounded-lg bg-black/70 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/90"
+                                  title="Adicionar texto"
+                                >
+                                  <Type className="w-5 h-5" />
+                                </button>
                               </div>
                             )}
 
@@ -1105,34 +1144,45 @@ export default function GuidedWizard() {
                                   className="flex-1 gap-1"
                                 >
                                   <Copy className="w-3 h-3" />
-                                  Copiar Caption
+                                  Copiar
                                 </Button>
                                 {item.status === "done" && item.imageUrl && (
-                                  <Button
-                                    onClick={async () => {
-                                      try {
-                                        const response = await fetch(item.imageUrl!);
-                                        const blob = await response.blob();
-                                        const url = window.URL.createObjectURL(blob);
-                                        const link = document.createElement("a");
-                                        link.href = url;
-                                        link.download = `autopost-${platform}-${idx + 1}-${Date.now()}.png`;
-                                        document.body.appendChild(link);
-                                        link.click();
-                                        document.body.removeChild(link);
-                                        window.URL.revokeObjectURL(url);
-                                        toast.success("Imagem baixada!");
-                                      } catch (error) {
-                                        toast.error("Erro ao baixar imagem");
-                                      }
-                                    }}
-                                    variant="outline"
-                                    size="sm"
-                                    className="flex-1 gap-1"
-                                  >
-                                    <Download className="w-3 h-3" />
-                                    Baixar
-                                  </Button>
+                                  <>
+                                    <Button
+                                      onClick={() => handleOpenTextOverlay(idx)}
+                                      variant="outline"
+                                      size="sm"
+                                      className="flex-1 gap-1"
+                                    >
+                                      <Type className="w-3 h-3" />
+                                      Texto
+                                    </Button>
+                                    <Button
+                                      onClick={async () => {
+                                        try {
+                                          const response = await fetch(item.imageUrl!);
+                                          const blob = await response.blob();
+                                          const url = window.URL.createObjectURL(blob);
+                                          const link = document.createElement("a");
+                                          link.href = url;
+                                          link.download = `autopost-${platform}-${idx + 1}-${Date.now()}.png`;
+                                          document.body.appendChild(link);
+                                          link.click();
+                                          document.body.removeChild(link);
+                                          window.URL.revokeObjectURL(url);
+                                          toast.success("Imagem baixada!");
+                                        } catch (error) {
+                                          toast.error("Erro ao baixar imagem");
+                                        }
+                                      }}
+                                      variant="outline"
+                                      size="sm"
+                                      className="flex-1 gap-1"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                      Baixar
+                                    </Button>
+                                  </>
                                 )}
                               </div>
                             </div>
@@ -1215,17 +1265,35 @@ export default function GuidedWizard() {
                   {/* Generated Image */}
                   {generatedImageUrl && (
                     <div className="space-y-3">
-                      <div className="rounded-lg overflow-hidden border border-border/50">
+                      <div className="relative rounded-lg overflow-hidden border border-border/50 group">
                         <img src={generatedImageUrl} alt="Generated post image" className="w-full h-auto" />
+                        {/* Add Text Overlay Button */}
+                        <button
+                          onClick={handleOpenSingleTextOverlay}
+                          className="absolute top-3 right-3 p-2 rounded-lg bg-black/70 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/90"
+                          title="Adicionar texto"
+                        >
+                          <Type className="w-5 h-5" />
+                        </button>
                       </div>
-                      <Button
-                        onClick={handleDownloadImage}
-                        variant="outline"
-                        className="w-full gap-2"
-                      >
-                        <Download className="w-4 h-4" />
-                        Baixar Imagem
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={handleOpenSingleTextOverlay}
+                          variant="outline"
+                          className="flex-1 gap-2"
+                        >
+                          <Type className="w-4 h-4" />
+                          Adicionar Texto
+                        </Button>
+                        <Button
+                          onClick={handleDownloadImage}
+                          variant="outline"
+                          className="flex-1 gap-2"
+                        >
+                          <Download className="w-4 h-4" />
+                          Baixar Imagem
+                        </Button>
+                      </div>
                     </div>
                   )}
 
@@ -1387,6 +1455,24 @@ export default function GuidedWizard() {
           </div>
         </Card>
       </div>
+
+      {/* Text Overlay Editor for Batch Images */}
+      {textOverlayIndex !== null && batchResults[textOverlayIndex]?.imageUrl && (
+        <TextOverlayEditor
+          imageUrl={batchResults[textOverlayIndex].imageUrl!}
+          onSave={handleSaveTextOverlay}
+          onCancel={() => setTextOverlayIndex(null)}
+        />
+      )}
+
+      {/* Text Overlay Editor for Single Image */}
+      {singleImageTextOverlay && generatedImageUrl && (
+        <TextOverlayEditor
+          imageUrl={generatedImageUrl}
+          onSave={handleSaveSingleTextOverlay}
+          onCancel={() => setSingleImageTextOverlay(false)}
+        />
+      )}
     </div>
   );
 }
