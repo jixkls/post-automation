@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
-import { X, Check } from "lucide-react";
+import { X, Check, RefreshCw, Loader2 } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 
 interface TextOverlayEditorProps {
   imageUrl: string;
+  caption: string;
+  style?: string;
+  tone?: string;
   onSave: (dataUrl: string) => void;
   onCancel: () => void;
 }
@@ -18,31 +20,52 @@ const POSITION_OPTIONS: { id: TextPosition; label: string }[] = [
   { id: "bottom", label: "Base" },
 ];
 
-const COLOR_PRESETS = [
-  "#FFFFFF",
-  "#000000",
-  "#FF5733",
-  "#FFC300",
-  "#36D7B7",
-  "#3498DB",
-  "#9B59B6",
-  "#E91E63",
-];
-
 export default function TextOverlayEditor({
   imageUrl,
+  caption,
+  style,
+  tone,
   onSave,
   onCancel,
 }: TextOverlayEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [text, setText] = useState("");
-  const [position, setPosition] = useState<TextPosition>("bottom");
-  const [fontSize, setFontSize] = useState(32);
-  const [textColor, setTextColor] = useState("#FFFFFF");
-  const [showBackground, setShowBackground] = useState(true);
-  const [bgOpacity, setBgOpacity] = useState(70);
+  const [position, setPosition] = useState<TextPosition>("center");
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const imageRef = useRef<HTMLImageElement | null>(null);
+
+  const generateTextOverlayMutation = trpc.gemini.generateTextOverlay.useMutation();
+
+  // Generate AI text overlay on mount
+  const generateAIText = useCallback(async () => {
+    if (!caption) return;
+
+    setIsGenerating(true);
+    try {
+      const result = await generateTextOverlayMutation.mutateAsync({
+        caption,
+        style,
+        tone,
+      });
+
+      if (result.success && result.text) {
+        setText(result.text.toUpperCase());
+        setPosition(result.position);
+      }
+    } catch (error) {
+      console.error("Error generating text overlay:", error);
+      // Fallback: use first few words of caption
+      const words = caption.split(/\s+/).slice(0, 4).join(" ");
+      setText(words.toUpperCase());
+    }
+    setIsGenerating(false);
+  }, [caption, style, tone, generateTextOverlayMutation]);
+
+  // Generate AI text on mount
+  useEffect(() => {
+    generateAIText();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -60,56 +83,88 @@ export default function TextOverlayEditor({
 
     if (!text.trim()) return;
 
-    // Configure text
-    ctx.font = `bold ${fontSize * (canvas.width / 400)}px Inter, system-ui, sans-serif`;
+    // Scale factor based on canvas size
+    const scale = canvas.width / 400;
+
+    // Configure professional typography
+    const fontSize = Math.min(48 * scale, canvas.width * 0.08);
+    ctx.font = `bold ${fontSize}px Inter, system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
+    // Apply letter spacing simulation (canvas doesn't support letterSpacing natively)
+    const displayText = text.toUpperCase();
+
     // Measure text
-    const lines = text.split("\n");
-    const lineHeight = fontSize * (canvas.width / 400) * 1.2;
-    const totalTextHeight = lines.length * lineHeight;
-    const padding = 20 * (canvas.width / 400);
+    const textMetrics = ctx.measureText(displayText);
+    const textWidth = textMetrics.width * 1.1; // Add 10% for letter spacing effect
+    const textHeight = fontSize * 1.4;
+    const padding = 24 * scale;
 
     // Calculate Y position based on position setting
     let baseY: number;
     if (position === "top") {
-      baseY = padding + totalTextHeight / 2;
+      baseY = padding * 2 + textHeight / 2;
     } else if (position === "center") {
       baseY = canvas.height / 2;
     } else {
-      baseY = canvas.height - padding - totalTextHeight / 2;
+      baseY = canvas.height - padding * 2 - textHeight / 2;
     }
 
-    // Draw background if enabled
-    if (showBackground) {
-      const maxWidth = Math.max(
-        ...lines.map((line) => ctx.measureText(line).width)
-      );
-      const bgPadding = padding;
+    const boxX = canvas.width / 2 - textWidth / 2 - padding;
+    const boxY = baseY - textHeight / 2 - padding / 2;
+    const boxWidth = textWidth + padding * 2;
+    const boxHeight = textHeight + padding;
+    const borderRadius = 12 * scale;
 
-      ctx.fillStyle = `rgba(0, 0, 0, ${bgOpacity / 100})`;
-      ctx.beginPath();
-      ctx.roundRect(
-        canvas.width / 2 - maxWidth / 2 - bgPadding,
-        baseY - totalTextHeight / 2 - bgPadding / 2,
-        maxWidth + bgPadding * 2,
-        totalTextHeight + bgPadding,
-        10 * (canvas.width / 400)
-      );
-      ctx.fill();
-    }
+    // Draw glass effect background
+    ctx.save();
 
-    // Draw text with shadow for better visibility
-    ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
-    ctx.shadowBlur = 4 * (canvas.width / 400);
-    ctx.shadowOffsetX = 2 * (canvas.width / 400);
-    ctx.shadowOffsetY = 2 * (canvas.width / 400);
-    ctx.fillStyle = textColor;
+    // Semi-transparent background (simulating glass effect)
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, borderRadius);
+    ctx.fill();
 
-    lines.forEach((line, index) => {
-      const y = baseY - (totalTextHeight / 2) + (index + 0.5) * lineHeight;
-      ctx.fillText(line, canvas.width / 2, y);
+    // Border for glass effect
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.lineWidth = 1 * scale;
+    ctx.stroke();
+
+    ctx.restore();
+
+    // Draw accent line above text
+    const accentLineWidth = Math.min(60 * scale, textWidth * 0.3);
+    const accentLineY = boxY + padding * 0.3;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.fillRect(
+      canvas.width / 2 - accentLineWidth / 2,
+      accentLineY,
+      accentLineWidth,
+      2 * scale
+    );
+
+    // Draw text with professional shadow
+    ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+    ctx.shadowBlur = 15 * scale;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 4 * scale;
+    ctx.fillStyle = "#FFFFFF";
+
+    // Draw text with simulated letter spacing
+    const chars = displayText.split("");
+    const charSpacing = fontSize * 0.05;
+    let totalWidth = 0;
+    chars.forEach((char) => {
+      totalWidth += ctx.measureText(char).width + charSpacing;
+    });
+    totalWidth -= charSpacing; // Remove last spacing
+
+    let currentX = canvas.width / 2 - totalWidth / 2;
+    chars.forEach((char) => {
+      const charWidth = ctx.measureText(char).width;
+      ctx.fillText(char, currentX + charWidth / 2, baseY);
+      currentX += charWidth + charSpacing;
     });
 
     // Reset shadow
@@ -117,7 +172,17 @@ export default function TextOverlayEditor({
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
-  }, [text, position, fontSize, textColor, showBackground, bgOpacity, imageLoaded]);
+
+    // Draw accent line below text
+    const bottomAccentLineY = boxY + boxHeight - padding * 0.3 - 2 * scale;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.fillRect(
+      canvas.width / 2 - accentLineWidth / 2,
+      bottomAccentLineY,
+      accentLineWidth,
+      2 * scale
+    );
+  }, [text, position, imageLoaded]);
 
   // Load image
   useEffect(() => {
@@ -143,6 +208,10 @@ export default function TextOverlayEditor({
     onSave(dataUrl);
   };
 
+  const handleRegenerate = () => {
+    generateAIText();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="bg-background rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -165,13 +234,15 @@ export default function TextOverlayEditor({
                 Preview
               </h3>
               <div className="relative rounded-lg overflow-hidden border border-border bg-secondary/30">
-                <canvas
-                  ref={canvasRef}
-                  className="w-full h-auto"
-                />
-                {!imageLoaded && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
+                <canvas ref={canvasRef} className="w-full h-auto" />
+                {(!imageLoaded || isGenerating) && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                    <div className="text-center">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2 text-white" />
+                      <p className="text-sm text-white">
+                        {isGenerating ? "Gerando texto..." : "Carregando..."}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -179,21 +250,36 @@ export default function TextOverlayEditor({
 
             {/* Controls */}
             <div className="space-y-6">
-              {/* Text Input */}
+              {/* AI Generated Text Display */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Texto</label>
-                <textarea
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="Digite seu texto aqui..."
-                  className="w-full px-4 py-3 rounded-lg border border-border bg-background focus:outline-none focus:border-primary transition resize-none h-24"
-                />
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">Texto Gerado</label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRegenerate}
+                    disabled={isGenerating}
+                    className="gap-1 text-xs"
+                  >
+                    {isGenerating ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3 h-3" />
+                    )}
+                    Regenerar
+                  </Button>
+                </div>
+                <div className="px-4 py-3 rounded-lg border border-border bg-secondary/30">
+                  <p className="text-lg font-bold tracking-wider text-center">
+                    {text || (isGenerating ? "..." : "Nenhum texto")}
+                  </p>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Use Enter para criar novas linhas
+                  Texto extraido automaticamente da caption
                 </p>
               </div>
 
-              {/* Position */}
+              {/* Position Toggle */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">Posicao</label>
                 <div className="flex gap-2">
@@ -213,79 +299,16 @@ export default function TextOverlayEditor({
                 </div>
               </div>
 
-              {/* Font Size */}
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-sm font-medium">Tamanho da Fonte</label>
-                  <span className="text-sm text-muted-foreground">{fontSize}px</span>
-                </div>
-                <Slider
-                  value={[fontSize]}
-                  onValueChange={(value) => setFontSize(value[0])}
-                  min={16}
-                  max={72}
-                  step={2}
-                  className="w-full"
-                />
-              </div>
-
-              {/* Text Color */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Cor do Texto</label>
-                <div className="flex gap-2 flex-wrap">
-                  {COLOR_PRESETS.map((color) => (
-                    <button
-                      key={color}
-                      onClick={() => setTextColor(color)}
-                      className={`w-8 h-8 rounded-full border-2 transition ${
-                        textColor === color
-                          ? "border-primary scale-110"
-                          : "border-border hover:scale-105"
-                      }`}
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
-                  <input
-                    type="color"
-                    value={textColor}
-                    onChange={(e) => setTextColor(e.target.value)}
-                    className="w-8 h-8 rounded-full cursor-pointer border-2 border-border"
-                  />
-                </div>
-              </div>
-
-              {/* Background Toggle */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-sm font-medium">Fundo do Texto</label>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Adiciona uma caixa de fundo atras do texto
-                    </p>
-                  </div>
-                  <Switch
-                    checked={showBackground}
-                    onCheckedChange={setShowBackground}
-                  />
-                </div>
-
-                {/* Background Opacity */}
-                {showBackground && (
-                  <div className="space-y-3 pl-4 border-l-2 border-border">
-                    <div className="flex justify-between items-center">
-                      <label className="text-sm font-medium">Opacidade do Fundo</label>
-                      <span className="text-sm text-muted-foreground">{bgOpacity}%</span>
-                    </div>
-                    <Slider
-                      value={[bgOpacity]}
-                      onValueChange={(value) => setBgOpacity(value[0])}
-                      min={20}
-                      max={100}
-                      step={5}
-                      className="w-full"
-                    />
-                  </div>
-                )}
+              {/* Style Info */}
+              <div className="bg-secondary/30 rounded-lg p-4 border border-border/50 space-y-2">
+                <h4 className="text-sm font-medium">Estilo Aplicado</h4>
+                <ul className="text-xs text-muted-foreground space-y-1">
+                  <li>• Tipografia moderna (Inter Bold)</li>
+                  <li>• Texto em maiusculas com espacamento</li>
+                  <li>• Fundo glass com borda suave</li>
+                  <li>• Sombra profissional</li>
+                  <li>• Linhas decorativas de destaque</li>
+                </ul>
               </div>
             </div>
           </div>
@@ -298,7 +321,7 @@ export default function TextOverlayEditor({
           </Button>
           <Button
             onClick={handleSave}
-            disabled={!text.trim()}
+            disabled={!text.trim() || isGenerating}
             className="flex-1 gap-2"
           >
             <Check className="w-4 h-4" />

@@ -459,6 +459,103 @@ Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text
       }
     }),
 
+  /**
+   * Generate text overlay suggestion from caption using AI
+   */
+  generateTextOverlay: publicProcedure
+    .input(
+      z.object({
+        caption: z.string().describe("The generated caption to extract key phrase from"),
+        style: z.string().optional().describe("Post style (minimalist, creative, etc.)"),
+        tone: z.string().optional().describe("Post tone (funny, inspiring, urgent, etc.)"),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { caption, style, tone } = input;
+
+      const prompt = `You are a professional graphic designer specializing in social media content. Extract the most impactful, memorable phrase from this caption for a text overlay on an image.
+
+Caption: "${caption}"
+${style ? `Style: ${style}` : ""}
+${tone ? `Tone: ${tone}` : ""}
+
+Requirements:
+- Extract 2-6 words maximum
+- Choose the most impactful phrase: CTA, emotional hook, or key message
+- Must work visually as text overlay on an image
+- Prioritize short, punchy phrases that grab attention
+
+Respond in JSON format only:
+{
+  "text": "THE KEY PHRASE",
+  "position": "top" | "center" | "bottom",
+  "alignment": "left" | "center" | "right"
+}
+
+Choose position based on typical design patterns:
+- "top" for announcements, headlines
+- "center" for powerful statements, quotes
+- "bottom" for CTAs, closings
+
+Return ONLY the JSON, no explanation.`;
+
+      try {
+        const response = await invokeLLM({
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a professional graphic designer. Extract key phrases for text overlays. Return only valid JSON.",
+            },
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+        });
+
+        const content = extractLLMContent(response, '{"text": "", "position": "center", "alignment": "center"}');
+
+        // Parse JSON response
+        let parsed: { text: string; position: string; alignment: string };
+        try {
+          // Clean the response - remove markdown code blocks if present
+          const cleanContent = content.replace(/```json\n?|\n?```/g, "").trim();
+          parsed = JSON.parse(cleanContent);
+        } catch {
+          // Fallback: try to extract text from caption
+          const words = caption.split(/\s+/).slice(0, 4).join(" ");
+          parsed = {
+            text: words.toUpperCase(),
+            position: "center",
+            alignment: "center",
+          };
+        }
+
+        // Validate position and alignment
+        const validPositions = ["top", "center", "bottom"];
+        const validAlignments = ["left", "center", "right"];
+
+        return {
+          success: true,
+          text: parsed.text || "",
+          position: validPositions.includes(parsed.position) ? parsed.position as "top" | "center" | "bottom" : "center",
+          alignment: validAlignments.includes(parsed.alignment) ? parsed.alignment as "left" | "center" | "right" : "center",
+        };
+      } catch (error) {
+        console.error("Error generating text overlay:", error);
+        // Fallback: extract first few words from caption
+        const words = caption.split(/\s+/).slice(0, 4).join(" ");
+        return {
+          success: false,
+          text: words.toUpperCase(),
+          position: "center" as const,
+          alignment: "center" as const,
+          error: error instanceof Error ? error.message : "Failed to generate text overlay",
+        };
+      }
+    }),
+
   generateImageFromPrompt: publicProcedure
     .input(
       z.object({

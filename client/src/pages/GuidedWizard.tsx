@@ -1460,6 +1460,9 @@ export default function GuidedWizard() {
       {textOverlayIndex !== null && batchResults[textOverlayIndex]?.imageUrl && (
         <TextOverlayEditor
           imageUrl={batchResults[textOverlayIndex].imageUrl!}
+          caption={batchResults[textOverlayIndex].caption}
+          style={style}
+          tone={tone}
           onSave={handleSaveTextOverlay}
           onCancel={() => setTextOverlayIndex(null)}
         />
@@ -1469,6 +1472,9 @@ export default function GuidedWizard() {
       {singleImageTextOverlay && generatedImageUrl && (
         <TextOverlayEditor
           imageUrl={generatedImageUrl}
+          caption={caption}
+          style={style}
+          tone={tone}
           onSave={handleSaveSingleTextOverlay}
           onCancel={() => setSingleImageTextOverlay(false)}
         />
