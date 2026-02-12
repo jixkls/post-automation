@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import { invokeLLM, InvokeResult, TextContent, ImageContent, FileContent } from "../_core/llm";
-import { generateImage, GenerateImageOptions } from "../_core/imageGeneration";
+import { generateImage, GenerateImageOptions, TextOverlayConfig } from "../_core/imageGeneration";
+import { fetchImageAsBase64, buildProductReferencePrompt, buildPersonReferencePrompt } from "../_core/promptEngineering";
 import { storagePut } from "../storage";
 
 // Shared platform schema for consistent type safety
@@ -224,9 +225,9 @@ Make it engaging, include relevant hashtags and emojis. Keep it under 280 charac
 
         // Build the image prompt based on whether product image is provided
         const productContext = productImageUrl
-          ? "The image should prominently feature the product from the uploaded image as the main component. Compose the rest of the scene around it."
+          ? "The attached product image is the HERO of this shot. Recreate the exact product (shape, colors, branding, packaging) with photorealistic accuracy as the central subject. Build the entire scene around it."
           : "";
-        
+
         const aspectRatioContext = aspectRatio
           ? `Format: ${aspectRatio}. Optimize composition for this format.`
           : "";
@@ -236,11 +237,11 @@ Make it engaging, include relevant hashtags and emojis. Keep it under 280 charac
             {
               role: "system",
               content:
-                "You are an expert prompt engineer for AI image generation. Create detailed, optimized prompts for Gemini Imagen API. Return only the prompt text.",
+                "You are an expert photography director and prompt engineer. Generate a single, detailed photography prompt for AI image generation. The prompt MUST include specific photography terminology: camera model, lens, lighting setup, depth of field, and composition rules for maximum photorealism. Return ONLY the prompt text, nothing else.",
             },
             {
               role: "user",
-              content: `Create an optimized prompt for Gemini Imagen API for a ${platform} image (${dimensions[platform]}):
+              content: `Create a photorealistic image prompt for a ${platform} image (${dimensions[platform]}):
 
 Topic: ${topic}
 Visual Style: ${style}
@@ -248,6 +249,14 @@ Tone: ${tone}
 Goal: ${goal}
 ${aspectRatioContext}
 ${productContext}
+
+The prompt MUST include:
+1. Specific camera and lens reference (e.g., "shot on Canon EOS R5 with 50mm f/1.4")
+2. Lighting setup description
+3. Depth of field specification (e.g., "shallow DOF at f/2.0, creamy bokeh")
+4. Color science and grading direction
+5. Composition rule (e.g., "rule of thirds, subject in left third")
+6. Negative constraints: "no text, no watermarks, no artifacts, 8K resolution, photorealistic"
 
 Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text.`,
             },
@@ -329,26 +338,10 @@ Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text
         productImageUrl: z.string().optional(),
         aspectRatio: z.string().optional(),
         quantity: z.number().min(1).max(10),
-        useSameModel: z.boolean(),
-        modelDescription: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
-      const { topic, style, tone, goal, platform, aspectRatio, quantity, useSameModel, modelDescription } = input;
-
-      // Predefined variation contexts for character consistency
-      const variationContexts = [
-        "vista frontal, contato visual direto",
-        "vista tres-quartos da esquerda",
-        "vista tres-quartos da direita",
-        "close-up, expressao engajada",
-        "plano medio, pose natural",
-        "corpo inteiro, postura confiante",
-        "angulo de baixo para cima, impactante",
-        "angulo de cima para baixo, intimo",
-        "perfil lateral, olhando ao longe",
-        "vista de costas olhando por cima do ombro",
-      ];
+      const { topic, style, tone, goal, platform, productImageUrl, aspectRatio, quantity } = input;
 
       try {
         const items = [];
@@ -363,6 +356,10 @@ Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text
 
         const aspectRatioContext = aspectRatio
           ? `Format: ${aspectRatio}. Optimize composition for this format.`
+          : "";
+
+        const productContext = productImageUrl
+          ? "The attached product image is the HERO of this shot. Recreate the exact product (shape, colors, branding, packaging) with photorealistic accuracy as the central subject. Build the entire scene around it."
           : "";
 
         for (let i = 0; i < quantity; i++) {
@@ -387,52 +384,42 @@ Make it engaging, include relevant hashtags and emojis. Keep it under 280 charac
             ],
           });
 
-          // Build character consistency prefix if enabled
-          let characterConsistencyPrefix = "";
-          if (useSameModel && modelDescription) {
-            const variationContext = variationContexts[i % variationContexts.length];
-            characterConsistencyPrefix = `CONSISTENCIA DE PERSONAGEM: A imagem deve apresentar esta pessoa especifica:
-${modelDescription}
-
-Mantenha: tracos faciais, tom de pele, cor/estilo do cabelo, tipo fisico.
-Varie apenas: pose, angulo da camera, expressao, cenario.
-
-VARIACAO #${i + 1}: ${variationContext}
-
-`;
-          }
-
           // Generate image prompt with variation
           const imagePromptResponse = await invokeLLM({
             messages: [
               {
                 role: "system",
                 content:
-                  "You are an expert prompt engineer for AI image generation. Create detailed, optimized prompts for Gemini Imagen API. Return only the prompt text.",
+                  "You are an expert photography director and prompt engineer. Generate a single, detailed photography prompt for AI image generation. The prompt MUST include specific photography terminology: camera model, lens, lighting setup, depth of field, and composition rules for maximum photorealism. Return ONLY the prompt text, nothing else.",
               },
               {
                 role: "user",
-                content: `Create variation #${i + 1} of an optimized prompt for Gemini Imagen API for a ${platform} image (${dimensions[platform]}):
+                content: `Create variation #${i + 1} of a photorealistic image prompt for a ${platform} image (${dimensions[platform]}):
 
 Topic: ${topic}
 Visual Style: ${style}
 Tone: ${tone}
 Goal: ${goal}
 ${aspectRatioContext}
+${productContext}
 
 This is variation ${i + 1} of ${quantity}. Create a unique composition/scene while maintaining the same theme.
+
+The prompt MUST include:
+1. Specific camera and lens reference (e.g., "shot on Canon EOS R5 with 50mm f/1.4")
+2. Lighting setup description
+3. Depth of field specification (e.g., "shallow DOF at f/2.0, creamy bokeh")
+4. Color science and grading direction
+5. Composition rule (e.g., "rule of thirds, subject in left third")
+6. Negative constraints: "no text, no watermarks, no artifacts, 8K resolution, photorealistic"
+
 Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text.`,
               },
             ],
           });
 
           const caption = extractLLMContent(captionResponse, `A ${style} post about ${topic}`);
-          let imagePrompt = extractLLMContent(imagePromptResponse, `A ${style} image of ${topic}`);
-
-          // Prepend character consistency instructions if enabled
-          if (characterConsistencyPrefix) {
-            imagePrompt = characterConsistencyPrefix + imagePrompt;
-          }
+          const imagePrompt = extractLLMContent(imagePromptResponse, `A ${style} image of ${topic}`);
 
           items.push({
             index: i,
@@ -446,7 +433,6 @@ Make it specific, descriptive, and under 480 tokens. Return ONLY the prompt text
           items,
           platform,
           aspectRatio: aspectRatio || "default",
-          useSameModel,
         };
       } catch (error) {
         console.error("Error generating batch posts:", error);
@@ -536,11 +522,25 @@ Return ONLY the JSON, no explanation.`;
         const validPositions = ["top", "center", "bottom"];
         const validAlignments = ["left", "center", "right"];
 
+        // Determine AI text style based on post tone
+        type TextStyleType = "bold" | "elegant" | "playful" | "minimal" | "neon" | "threed" | "gradient" | "vintage" | "graffiti";
+        const toneToStyle: Record<string, TextStyleType> = {
+          funny: "playful",
+          inspiring: "elegant",
+          urgent: "bold",
+          educational: "minimal",
+          emotional: "elegant",
+        };
+        const aiTextStyle = tone ? toneToStyle[tone] || "bold" : "bold";
+
         return {
           success: true,
           text: parsed.text || "",
           position: validPositions.includes(parsed.position) ? parsed.position as "top" | "center" | "bottom" : "center",
           alignment: validAlignments.includes(parsed.alignment) ? parsed.alignment as "left" | "center" | "right" : "center",
+          aiConfig: {
+            style: aiTextStyle,
+          },
         };
       } catch (error) {
         console.error("Error generating text overlay:", error);
@@ -551,6 +551,9 @@ Return ONLY the JSON, no explanation.`;
           text: words.toUpperCase(),
           position: "center" as const,
           alignment: "center" as const,
+          aiConfig: {
+            style: "bold" as const,
+          },
           error: error instanceof Error ? error.message : "Failed to generate text overlay",
         };
       }
@@ -562,10 +565,16 @@ Return ONLY the JSON, no explanation.`;
         prompt: z.string(),
         aspectRatio: z.string().optional(),
         productImageUrl: z.string().optional(),
+        preserveModel: z.boolean().optional().describe("Preserve the person from the reference image"),
+        embedText: z.object({
+          text: z.string(),
+          position: z.enum(["top", "center", "bottom"]).optional(),
+          style: z.enum(["bold", "elegant", "playful", "minimal", "neon", "threed", "gradient", "vintage", "graffiti"]).optional(),
+        }).optional().describe("Text to embed directly in the generated image using AI"),
       })
     )
     .mutation(async ({ input }) => {
-      const { prompt, aspectRatio, productImageUrl } = input;
+      const { prompt, aspectRatio, productImageUrl, preserveModel, embedText } = input;
       try {
         let enhancedPrompt = prompt;
         if (aspectRatio) {
@@ -576,47 +585,35 @@ Return ONLY the JSON, no explanation.`;
         let originalImages: GenerateImageOptions["originalImages"] = undefined;
         if (productImageUrl) {
           try {
-            // Handle both local URLs and remote URLs
-            let imageBuffer: Buffer;
-            let mimeType = "image/png";
-
-            if (productImageUrl.startsWith("/uploads/")) {
-              // Local file - read from filesystem
-              const fs = await import("fs");
-              const path = await import("path");
-              const filePath = path.join(process.cwd(), "public", productImageUrl);
-              imageBuffer = fs.readFileSync(filePath);
-              // Detect mime type from extension
-              if (productImageUrl.endsWith(".jpg") || productImageUrl.endsWith(".jpeg")) {
-                mimeType = "image/jpeg";
-              } else if (productImageUrl.endsWith(".webp")) {
-                mimeType = "image/webp";
-              }
-            } else {
-              // Remote URL - fetch the image
-              const imageResponse = await fetch(productImageUrl);
-              if (!imageResponse.ok) {
-                throw new Error(`Failed to fetch product image: ${imageResponse.status}`);
-              }
-              const arrayBuffer = await imageResponse.arrayBuffer();
-              imageBuffer = Buffer.from(arrayBuffer);
-              mimeType = imageResponse.headers.get("content-type") || "image/png";
-            }
-
-            const b64Json = imageBuffer.toString("base64");
+            const { b64Json, mimeType } = await fetchImageAsBase64(productImageUrl);
             originalImages = [{ b64Json, mimeType }];
 
-            // Enhance the prompt to emphasize using the product
-            enhancedPrompt = `IMPORTANT: The attached image is the PRODUCT that MUST be the main focus of the generated image. Keep the product exactly as it appears - same shape, colors, branding, and details. Create a scene around this exact product.\n\n${enhancedPrompt}`;
+            // Enhance the prompt based on preserveModel flag
+            if (preserveModel) {
+              enhancedPrompt = `${buildPersonReferencePrompt()}\n\n${enhancedPrompt}`;
+            } else {
+              enhancedPrompt = `${buildProductReferencePrompt()}\n\n${enhancedPrompt}`;
+            }
           } catch (fetchError) {
             console.error("Error fetching product image:", fetchError);
             // Continue without the product image
           }
         }
 
+        // Build text overlay config if embedText is provided
+        let textOverlay: TextOverlayConfig | undefined;
+        if (embedText) {
+          textOverlay = {
+            text: embedText.text,
+            position: embedText.position,
+            style: embedText.style,
+          };
+        }
+
         const generateOptions: GenerateImageOptions = {
           prompt: enhancedPrompt,
           originalImages,
+          textOverlay,
         };
 
         const result = await generateImage(generateOptions);

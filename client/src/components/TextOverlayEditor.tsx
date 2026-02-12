@@ -1,15 +1,22 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { X, Check, RefreshCw, Loader2 } from "lucide-react";
+import { X, Check, RefreshCw, Loader2, Sparkles, Paintbrush } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+
+type TextMode = "canvas" | "ai";
+type TextStyle = "bold" | "elegant" | "playful" | "minimal" | "neon" | "threed" | "gradient" | "vintage" | "graffiti";
 
 interface TextOverlayEditorProps {
   imageUrl: string;
   caption: string;
   style?: string;
   tone?: string;
+  imagePrompt?: string;
+  productImageUrl?: string;
+  aspectRatio?: string;
   onSave: (dataUrl: string) => void;
   onCancel: () => void;
+  onRegenerateWithText?: (text: string, position: string, textStyle: TextStyle) => void;
 }
 
 type TextPosition = "top" | "center" | "bottom";
@@ -20,22 +27,42 @@ const POSITION_OPTIONS: { id: TextPosition; label: string }[] = [
   { id: "bottom", label: "Base" },
 ];
 
+const TEXT_STYLE_OPTIONS: { id: TextStyle; label: string; desc: string }[] = [
+  { id: "bold", label: "Bold", desc: "Impactante e moderno" },
+  { id: "elegant", label: "Elegante", desc: "Sofisticado e classico" },
+  { id: "playful", label: "Divertido", desc: "Criativo e artistico" },
+  { id: "minimal", label: "Minimal", desc: "Limpo e sutil" },
+  { id: "neon", label: "Neon", desc: "Brilhante e vibrante" },
+  { id: "threed", label: "3D", desc: "Profundidade e dimensao" },
+  { id: "gradient", label: "Gradiente", desc: "Moderno e colorido" },
+  { id: "vintage", label: "Vintage", desc: "Retro e nostalgico" },
+  { id: "graffiti", label: "Graffiti", desc: "Urbano e ousado" },
+];
+
 export default function TextOverlayEditor({
   imageUrl,
   caption,
   style,
   tone,
+  imagePrompt,
+  productImageUrl,
+  aspectRatio,
   onSave,
   onCancel,
+  onRegenerateWithText,
 }: TextOverlayEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [text, setText] = useState("");
   const [position, setPosition] = useState<TextPosition>("center");
+  const [textStyle, setTextStyle] = useState<TextStyle>("bold");
+  const [textMode, setTextMode] = useState<TextMode>("canvas");
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
   const generateTextOverlayMutation = trpc.gemini.generateTextOverlay.useMutation();
+  const generateImageMutation = trpc.gemini.generateImageFromPrompt.useMutation();
 
   // Generate AI text overlay on mount
   const generateAIText = useCallback(async () => {
@@ -52,6 +79,9 @@ export default function TextOverlayEditor({
       if (result.success && result.text) {
         setText(result.text.toUpperCase());
         setPosition(result.position);
+        if (result.aiConfig?.style) {
+          setTextStyle(result.aiConfig.style);
+        }
       }
     } catch (error) {
       console.error("Error generating text overlay:", error);
@@ -212,6 +242,35 @@ export default function TextOverlayEditor({
     generateAIText();
   };
 
+  const handleRegenerateWithAI = async () => {
+    if (!text.trim() || !imagePrompt) return;
+
+    setIsRegenerating(true);
+    try {
+      const result = await generateImageMutation.mutateAsync({
+        prompt: imagePrompt,
+        aspectRatio,
+        productImageUrl,
+        embedText: {
+          text: text,
+          position: position,
+          style: textStyle,
+        },
+      });
+
+      if (result.success && result.imageUrl) {
+        // If callback provided, use it; otherwise save directly
+        if (onRegenerateWithText) {
+          onRegenerateWithText(text, position, textStyle);
+        }
+        onSave(result.imageUrl);
+      }
+    } catch (error) {
+      console.error("Error regenerating with AI text:", error);
+    }
+    setIsRegenerating(false);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="bg-background rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -250,6 +309,40 @@ export default function TextOverlayEditor({
 
             {/* Controls */}
             <div className="space-y-6">
+              {/* Mode Toggle */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Modo de Texto</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setTextMode("canvas")}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition flex items-center justify-center gap-2 ${
+                      textMode === "canvas"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <Paintbrush className="w-4 h-4" />
+                    Canvas
+                  </button>
+                  <button
+                    onClick={() => setTextMode("ai")}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition flex items-center justify-center gap-2 ${
+                      textMode === "ai"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    IA Nativa
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {textMode === "canvas"
+                    ? "Texto sobreposto com Canvas (mais controle)"
+                    : "Texto gerado pela IA na imagem (mais natural)"}
+                </p>
+              </div>
+
               {/* AI Generated Text Display */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -299,17 +392,56 @@ export default function TextOverlayEditor({
                 </div>
               </div>
 
-              {/* Style Info */}
-              <div className="bg-secondary/30 rounded-lg p-4 border border-border/50 space-y-2">
-                <h4 className="text-sm font-medium">Estilo Aplicado</h4>
-                <ul className="text-xs text-muted-foreground space-y-1">
-                  <li>• Tipografia moderna (Inter Bold)</li>
-                  <li>• Texto em maiusculas com espacamento</li>
-                  <li>• Fundo glass com borda suave</li>
-                  <li>• Sombra profissional</li>
-                  <li>• Linhas decorativas de destaque</li>
-                </ul>
-              </div>
+              {/* Text Style (AI mode only) */}
+              {textMode === "ai" && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Estilo do Texto</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {TEXT_STYLE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        onClick={() => setTextStyle(opt.id)}
+                        className={`px-3 py-2 rounded-lg border-2 text-sm transition text-left ${
+                          textStyle === opt.id
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        <div className="font-medium">{opt.label}</div>
+                        <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Style Info (Canvas mode only) */}
+              {textMode === "canvas" && (
+                <div className="bg-secondary/30 rounded-lg p-4 border border-border/50 space-y-2">
+                  <h4 className="text-sm font-medium">Estilo Aplicado</h4>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• Tipografia moderna (Inter Bold)</li>
+                    <li>• Texto em maiusculas com espacamento</li>
+                    <li>• Fundo glass com borda suave</li>
+                    <li>• Sombra profissional</li>
+                    <li>• Linhas decorativas de destaque</li>
+                  </ul>
+                </div>
+              )}
+
+              {/* AI Mode Info */}
+              {textMode === "ai" && (
+                <div className="bg-primary/10 rounded-lg p-4 border border-primary/20 space-y-2">
+                  <h4 className="text-sm font-medium flex items-center gap-2">
+                    <Sparkles className="w-4 h-4" />
+                    Texto Nativo com IA
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    O texto sera renderizado diretamente pela IA durante a geracao da imagem,
+                    resultando em uma integracao mais natural com o design.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -319,14 +451,34 @@ export default function TextOverlayEditor({
           <Button variant="outline" onClick={onCancel} className="flex-1">
             Cancelar
           </Button>
-          <Button
-            onClick={handleSave}
-            disabled={!text.trim() || isGenerating}
-            className="flex-1 gap-2"
-          >
-            <Check className="w-4 h-4" />
-            Aplicar Texto
-          </Button>
+          {textMode === "canvas" ? (
+            <Button
+              onClick={handleSave}
+              disabled={!text.trim() || isGenerating}
+              className="flex-1 gap-2"
+            >
+              <Check className="w-4 h-4" />
+              Aplicar Texto
+            </Button>
+          ) : (
+            <Button
+              onClick={handleRegenerateWithAI}
+              disabled={!text.trim() || isGenerating || isRegenerating || !imagePrompt}
+              className="flex-1 gap-2"
+            >
+              {isRegenerating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Gerando...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Gerar com Texto
+                </>
+              )}
+            </Button>
+          )}
         </div>
       </div>
     </div>

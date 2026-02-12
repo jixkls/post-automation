@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download, AlertCircle, RefreshCw, X, Save, FileText, ChevronDown, Type } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, Sparkles, Copy, Check, Download, AlertCircle, RefreshCw, X, Save, FileText, ChevronDown, Type, Image } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import TextOverlayEditor from "@/components/TextOverlayEditor";
@@ -62,9 +62,28 @@ const ASPECT_RATIOS = {
   ],
 };
 
-type WizardStep = "topic" | "product" | "platform" | "aspect" | "style" | "tone" | "goal" | "batch" | "result";
+type WizardStep = "topic" | "product" | "platform" | "aspect" | "style" | "tone" | "goal" | "textApproach" | "batch" | "result";
+type TextApproach = "ai" | "canvas" | "none";
+type TextStyle = "bold" | "elegant" | "playful" | "minimal" | "neon" | "threed" | "gradient" | "graffiti";
 
-const STEPS: WizardStep[] = ["topic", "product", "platform", "aspect", "style", "tone", "goal", "batch", "result"];
+const STEPS: WizardStep[] = ["topic", "product", "platform", "aspect", "style", "tone", "goal", "textApproach", "batch", "result"];
+
+const TEXT_APPROACH_OPTIONS: { id: TextApproach; label: string; desc: string; icon: string }[] = [
+  { id: "ai", label: "Texto com IA", desc: "Texto renderizado pela IA na imagem", icon: "sparkles" },
+  { id: "canvas", label: "Texto Sobreposto", desc: "Adicione texto apos gerar a imagem", icon: "type" },
+  { id: "none", label: "Sem Texto", desc: "Imagem sem texto overlay", icon: "image" },
+];
+
+const TEXT_STYLE_OPTIONS: { id: TextStyle; label: string; desc: string }[] = [
+  { id: "bold", label: "Bold", desc: "Impactante e moderno" },
+  { id: "elegant", label: "Elegante", desc: "Sofisticado e classico" },
+  { id: "playful", label: "Divertido", desc: "Criativo e artistico" },
+  { id: "minimal", label: "Minimal", desc: "Limpo e sutil" },
+  { id: "neon", label: "Neon", desc: "Brilhante e vibrante" },
+  { id: "threed", label: "3D", desc: "Profundidade e dimensao" },
+  { id: "gradient", label: "Gradiente", desc: "Moderno e colorido" },
+  { id: "graffiti", label: "Graffiti", desc: "Urbano e ousado" },
+];
 
 export default function GuidedWizard() {
   const [step, setStep] = useState<WizardStep>("topic");
@@ -85,8 +104,9 @@ export default function GuidedWizard() {
 
   // Batch config
   const [batchQuantity, setBatchQuantity] = useState(1);
-  const [useSameModel, setUseSameModel] = useState(false);
-  const [modelDescription, setModelDescription] = useState("");
+
+  // Preserve model toggle (for reference images with people)
+  const [preserveModel, setPreserveModel] = useState(false);
 
   // Batch results
   const [batchResults, setBatchResults] = useState<BatchResultItem[]>([]);
@@ -104,6 +124,12 @@ export default function GuidedWizard() {
   // Text overlay state
   const [textOverlayIndex, setTextOverlayIndex] = useState<number | null>(null);
   const [singleImageTextOverlay, setSingleImageTextOverlay] = useState(false);
+
+  // Text approach state
+  const [textApproach, setTextApproach] = useState<TextApproach>("none");
+  const [overlayText, setOverlayText] = useState("");
+  const [textStyle, setTextStyle] = useState<TextStyle>("bold");
+  const [textPosition, setTextPosition] = useState<"top" | "center" | "bottom">("center");
 
   const generatePostMutation = trpc.gemini.generatePost.useMutation({
     onSuccess: (data) => {
@@ -240,8 +266,8 @@ export default function GuidedWizard() {
       toast.error("Escolha um objetivo");
       return;
     }
-    if (step === "batch" && useSameModel && !modelDescription.trim()) {
-      toast.error("Descreva a pessoa para manter consistência");
+    if (step === "textApproach" && textApproach === "ai" && !overlayText.trim()) {
+      toast.error("Digite o texto para a imagem");
       return;
     }
 
@@ -281,8 +307,6 @@ export default function GuidedWizard() {
         goal,
         productImageUrl: productImage,
         quantity: batchQuantity,
-        useSameModel,
-        modelDescription: useSameModel ? modelDescription : undefined,
       });
 
       if (!batchData.success || !batchData.items) {
@@ -315,10 +339,21 @@ export default function GuidedWizard() {
         ));
 
         try {
+          // Build embedText config if AI text approach is selected
+          const embedTextConfig = textApproach === "ai" && overlayText.trim()
+            ? {
+                text: overlayText,
+                position: textPosition,
+                style: textStyle,
+              }
+            : undefined;
+
           const imageResult = await generateImageMutation.mutateAsync({
             prompt: batchData.items[i].imagePrompt,
             aspectRatio,
             productImageUrl: productImage,
+            preserveModel,
+            embedText: embedTextConfig,
           });
 
           if (imageResult.success && imageResult.imageUrl) {
@@ -364,10 +399,21 @@ export default function GuidedWizard() {
     ));
 
     try {
+      // Build embedText config if AI text approach is selected
+      const embedTextConfig = textApproach === "ai" && overlayText.trim()
+        ? {
+            text: overlayText,
+            position: textPosition,
+            style: textStyle,
+          }
+        : undefined;
+
       const imageResult = await generateImageMutation.mutateAsync({
         prompt: item.imagePrompt,
         aspectRatio,
         productImageUrl: productImage,
+        preserveModel,
+        embedText: embedTextConfig,
       });
 
       if (imageResult.success && imageResult.imageUrl) {
@@ -422,10 +468,21 @@ export default function GuidedWizard() {
 
   const handleGenerateImage = () => {
     if (imagePrompt) {
+      // Build embedText config if AI text approach is selected
+      const embedTextConfig = textApproach === "ai" && overlayText.trim()
+        ? {
+            text: overlayText,
+            position: textPosition,
+            style: textStyle,
+          }
+        : undefined;
+
       generateImageMutation.mutate({
         prompt: imagePrompt,
         aspectRatio,
         productImageUrl: productImage,
+        preserveModel,
+        embedText: embedTextConfig,
       });
     }
   };
@@ -446,12 +503,16 @@ export default function GuidedWizard() {
     setCopiedPrompt(false);
     // Reset batch state
     setBatchQuantity(1);
-    setUseSameModel(false);
-    setModelDescription("");
+    setPreserveModel(false);
     setBatchResults([]);
     setCurrentBatchIndex(0);
     setIsBatchGenerating(false);
     setBatchCancelled(false);
+    // Reset text approach state
+    setTextApproach("none");
+    setOverlayText("");
+    setTextStyle("bold");
+    setTextPosition("center");
   };
 
   const copyToClipboard = (text: string, setSetter: (value: boolean) => void) => {
@@ -487,8 +548,6 @@ export default function GuidedWizard() {
     setTone(template.tone || "");
     setGoal(template.goal || "");
     setBatchQuantity(template.defaultBatchQuantity || 1);
-    setUseSameModel(template.useSameModel || false);
-    setModelDescription(template.modelDescription || "");
     setShowTemplateDropdown(false);
     incrementUseCountMutation.mutate({ id: template.id });
     toast.success(`Template "${template.name}" carregado!`);
@@ -508,8 +567,6 @@ export default function GuidedWizard() {
       tone: tone || undefined,
       goal: goal || undefined,
       defaultBatchQuantity: batchQuantity,
-      useSameModel,
-      modelDescription: modelDescription || undefined,
     });
   };
 
@@ -678,16 +735,32 @@ export default function GuidedWizard() {
                 <p className="text-muted-foreground">Clique ou arraste uma imagem aqui</p>
               </div>
               {productImage && (
-                <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
-                  <p className="text-xs text-muted-foreground mb-2">Imagem carregada</p>
-                  <img src={productImage} alt="Product" className="max-h-40 mx-auto object-contain" />
-                  <button
-                    onClick={() => setProductImage("")}
-                    className="mt-2 text-xs text-destructive hover:underline"
-                  >
-                    Remover imagem
-                  </button>
-                </div>
+                <>
+                  <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
+                    <p className="text-xs text-muted-foreground mb-2">Imagem carregada</p>
+                    <img src={productImage} alt="Product" className="max-h-40 mx-auto object-contain" />
+                    <button
+                      onClick={() => setProductImage("")}
+                      className="mt-2 text-xs text-destructive hover:underline"
+                    >
+                      Remover imagem
+                    </button>
+                  </div>
+
+                  {/* Preserve Model Toggle */}
+                  <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg border border-border/50">
+                    <div>
+                      <label className="text-sm font-medium">Manter Pessoa</label>
+                      <p className="text-xs text-muted-foreground">
+                        Preserva a pessoa da imagem de referência
+                      </p>
+                    </div>
+                    <Switch
+                      checked={preserveModel}
+                      onCheckedChange={setPreserveModel}
+                    />
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -907,7 +980,126 @@ export default function GuidedWizard() {
             </div>
           )}
 
-          {/* Step 8: Batch */}
+          {/* Step 8: Text Approach */}
+          {step === "textApproach" && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-bold mb-2">Texto na Imagem?</h2>
+                <p className="text-muted-foreground mb-4">Escolha como adicionar texto ao post</p>
+              </div>
+
+              {/* Text Approach Options */}
+              <div className="space-y-3">
+                {TEXT_APPROACH_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setTextApproach(opt.id)}
+                    className={`w-full p-4 rounded-lg border-2 transition-all text-left flex items-start gap-4 ${
+                      textApproach === opt.id
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${textApproach === opt.id ? "bg-primary/20" : "bg-secondary/50"}`}>
+                      {opt.icon === "sparkles" && <Sparkles className="w-5 h-5" />}
+                      {opt.icon === "type" && <Type className="w-5 h-5" />}
+                      {opt.icon === "image" && <Image className="w-5 h-5" />}
+                    </div>
+                    <div>
+                      <div className="font-semibold">{opt.label}</div>
+                      <div className="text-sm text-muted-foreground">{opt.desc}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* AI Text Options */}
+              {textApproach === "ai" && (
+                <div className="space-y-4 pt-4 border-t border-border/50">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Texto para a Imagem</label>
+                    <input
+                      type="text"
+                      value={overlayText}
+                      onChange={(e) => setOverlayText(e.target.value)}
+                      placeholder="Ex: OFERTA ESPECIAL, NOVIDADE, etc."
+                      className="w-full px-4 py-3 rounded-lg border border-border bg-background focus:outline-none focus:border-primary transition uppercase"
+                      maxLength={50}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Maximo 50 caracteres. Use frases curtas e impactantes.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Posicao do Texto</label>
+                    <div className="flex gap-2">
+                      {[
+                        { id: "top", label: "Topo" },
+                        { id: "center", label: "Centro" },
+                        { id: "bottom", label: "Base" },
+                      ].map((pos) => (
+                        <button
+                          key={pos.id}
+                          onClick={() => setTextPosition(pos.id as "top" | "center" | "bottom")}
+                          className={`flex-1 px-4 py-2 rounded-lg border-2 text-sm font-medium transition ${
+                            textPosition === pos.id
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border hover:border-primary/50"
+                          }`}
+                        >
+                          {pos.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Estilo do Texto</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {TEXT_STYLE_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.id}
+                          onClick={() => setTextStyle(opt.id)}
+                          className={`px-3 py-2 rounded-lg border-2 text-sm transition text-left ${
+                            textStyle === opt.id
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border hover:border-primary/50"
+                          }`}
+                        >
+                          <div className="font-medium">{opt.label}</div>
+                          <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-primary/10 rounded-lg p-4 border border-primary/20">
+                    <p className="text-sm flex items-center gap-2">
+                      <Sparkles className="w-4 h-4" />
+                      <span>
+                        A IA renderizara o texto <strong>"{overlayText || "..."}"</strong> diretamente na imagem.
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Canvas Text Info */}
+              {textApproach === "canvas" && (
+                <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
+                  <p className="text-sm flex items-center gap-2">
+                    <Type className="w-4 h-4" />
+                    <span>
+                      Apos gerar a imagem, voce podera adicionar texto com o editor de sobreposicao.
+                    </span>
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 9: Batch */}
           {step === "batch" && (
             <div className="space-y-6">
               <div>
@@ -935,44 +1127,12 @@ export default function GuidedWizard() {
                 </div>
               </div>
 
-              {/* Same Model Toggle */}
-              <div className="bg-secondary/30 rounded-lg p-4 border border-border/50 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-sm font-medium">Usar o mesmo modelo</label>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Mantém a mesma pessoa em todas as imagens
-                    </p>
-                  </div>
-                  <Switch
-                    checked={useSameModel}
-                    onCheckedChange={setUseSameModel}
-                  />
-                </div>
-
-                {/* Model Description (conditional) */}
-                {useSameModel && (
-                  <div className="space-y-2 pt-2 border-t border-border/50">
-                    <label className="text-sm font-medium">Descrição da pessoa</label>
-                    <textarea
-                      value={modelDescription}
-                      onChange={(e) => setModelDescription(e.target.value)}
-                      placeholder="Descreva a pessoa: idade, cabelo, pele, roupa..."
-                      className="w-full px-4 py-3 rounded-lg border border-border bg-background focus:outline-none focus:border-primary transition resize-none h-24 text-sm"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Exemplo: Mulher jovem, cabelo castanho ondulado, pele clara, camisa branca
-                    </p>
-                  </div>
-                )}
-              </div>
-
               {/* Summary */}
               <div className="bg-primary/10 rounded-lg p-4 border border-primary/20">
                 <p className="text-sm">
                   <span className="font-medium">Resumo:</span> Serão geradas{" "}
                   <span className="font-bold text-primary">{batchQuantity}</span> variações
-                  {useSameModel && " com a mesma pessoa em todas as imagens"}.
+                  {preserveModel && productImage && " preservando a pessoa da imagem de referência"}.
                 </p>
               </div>
             </div>
@@ -1385,6 +1545,14 @@ export default function GuidedWizard() {
                   <span className="text-muted-foreground">Objetivo:</span>
                   <span className="font-semibold ml-2">{GOALS.find((g) => g.id === goal)?.label}</span>
                 </div>
+                {textApproach !== "none" && (
+                  <div>
+                    <span className="text-muted-foreground">Texto:</span>
+                    <span className="font-semibold ml-2">
+                      {textApproach === "ai" ? `IA (${overlayText})` : "Canvas"}
+                    </span>
+                  </div>
+                )}
                 {batchResults.length > 0 && (
                   <div>
                     <span className="text-muted-foreground">Variações:</span>
@@ -1463,6 +1631,9 @@ export default function GuidedWizard() {
           caption={batchResults[textOverlayIndex].caption}
           style={style}
           tone={tone}
+          imagePrompt={batchResults[textOverlayIndex].imagePrompt}
+          productImageUrl={productImage}
+          aspectRatio={aspectRatio}
           onSave={handleSaveTextOverlay}
           onCancel={() => setTextOverlayIndex(null)}
         />
@@ -1475,6 +1646,9 @@ export default function GuidedWizard() {
           caption={caption}
           style={style}
           tone={tone}
+          imagePrompt={imagePrompt}
+          productImageUrl={productImage}
+          aspectRatio={aspectRatio}
           onSave={handleSaveSingleTextOverlay}
           onCancel={() => setSingleImageTextOverlay(false)}
         />

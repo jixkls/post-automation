@@ -8,14 +8,18 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import GuidedWizard from "./pages/GuidedWizard";
 import PostHistory from "./pages/PostHistory";
 import Templates from "./pages/Templates";
+import CreativeEditor from "./pages/CreativeEditor";
+import CreativePipeline from "./pages/CreativePipeline";
 
 function Router() {
   return (
     <AppLayout>
       <Switch>
         <Route path={""} component={GuidedWizard} />
+        <Route path={"/pipeline"} component={CreativePipeline} />
         <Route path={"/historico"} component={PostHistory} />
         <Route path={"/templates"} component={Templates} />
+        <Route path={"/creative-editor"} component={CreativeEditor} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}
         <Route component={NotFound} />

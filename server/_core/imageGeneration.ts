@@ -17,6 +17,7 @@
  */
 import { storagePut } from "server/storage";
 import { ENV } from "./env";
+import { PHOTOREALISM_ANCHOR } from "./promptEngineering";
 
 const IMAGE_GENERATION_TIMEOUT_MS = 120000; // 120 seconds
 
@@ -50,6 +51,12 @@ type ImageGenerationApiResponse = {
   };
 };
 
+export type TextOverlayConfig = {
+  text: string;
+  position?: "top" | "center" | "bottom";
+  style?: "bold" | "elegant" | "playful" | "minimal" | "neon" | "threed" | "gradient" | "vintage" | "graffiti";
+};
+
 export type GenerateImageOptions = {
   prompt: string;
   originalImages?: Array<{
@@ -57,7 +64,54 @@ export type GenerateImageOptions = {
     b64Json?: string;
     mimeType?: string;
   }>;
+  textOverlay?: TextOverlayConfig;
 };
+
+/**
+ * Build an enhanced prompt with text rendering instructions for AI text-in-image
+ * Uses professional typography design practices and artistic style descriptors
+ */
+function buildPromptWithText(basePrompt: string, textConfig: TextOverlayConfig): string {
+  const { text, position = "center", style = "bold" } = textConfig;
+
+  const styleDescriptions: Record<string, string> = {
+    bold: "bold, impactful sans-serif typography with clean sharp edges, strong visual weight, high contrast black or white letters with subtle drop shadow, modern minimalist aesthetic",
+    elegant: "sophisticated elegant serif typography with refined letterforms and subtle flourishes, classic timeless appeal, thin delicate strokes, luxurious gold or cream tones",
+    playful: "hand-drawn whimsical typography with organic flowing lines, vibrant cheerful colors, slightly irregular playful letterforms, creative artistic flair",
+    minimal: "ultra-clean minimal sans-serif typography, generous white space, perfectly balanced composition, subtle sophisticated presence, monochromatic palette",
+    neon: "glowing neon sign typography with electric vibrant light emission, realistic glass tube effect, colorful glow and reflection, retro-futuristic cyberpunk aesthetic",
+    threed: "3D dimensional typography with realistic shadows and depth, letters that pop out of the image, cinematic lighting, bold perspective and volume",
+    gradient: "modern gradient typography with smooth color transitions, vibrant contemporary palette, sleek polished finish, Instagram-worthy aesthetic",
+    vintage: "retro vintage typography with distressed textures, nostalgic color palette, classic letterpress feel, authentic aged patina",
+    graffiti: "urban street art graffiti typography, spray paint texture, vibrant bold colors, edgy rebellious energy, artistic drips and splatters",
+  };
+
+  const positionDescriptions: Record<string, string> = {
+    top: "positioned prominently at the top third of the image with generous breathing room from edges",
+    center: "centered as the dominant focal element with balanced negative space around it",
+    bottom: "anchored at the bottom third of the image with comfortable margin from the edge",
+  };
+
+  return `${basePrompt}
+
+TYPOGRAPHY DESIGN REQUIREMENTS:
+Create a visually striking social media graphic with integrated text typography.
+
+TEXT CONTENT: The image must prominently display the text "${text}" as the focal design element.
+
+TYPOGRAPHY STYLE: ${styleDescriptions[style] || styleDescriptions.bold}
+
+TEXT PLACEMENT: The text should be ${positionDescriptions[position]}, composed as an integral part of the design with appropriate breathing room and visual balance.
+
+DESIGN PRINCIPLES:
+- High contrast between text and background for maximum legibility
+- Professional typography that feels hand-crafted, not generic
+- Text integrated naturally into the composition as a design element
+- Visual hierarchy that draws the eye to the text first
+- Artistic quality suitable for premium social media content
+
+CRITICAL: The text "${text}" must be spelled correctly, clearly readable, and visually impactful.`;
+}
 
 export type GenerateImageResponse = {
   url?: string;
@@ -88,8 +142,8 @@ export async function generateImage(
     );
   }
 
-  // Use Gemini API with image generation model (Nano Banana / Gemini 2.5 Flash Image)
-  const model = "gemini-2.5-flash-image";
+  // Use Gemini API with image generation model (Nano Banana Pro / Gemini 3 Pro Image)
+  const model = "gemini-3-pro-image-preview";
   const fullUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   // Build the request parts - images should come FIRST for better reference
@@ -109,8 +163,16 @@ export async function generateImage(
     }
   }
 
+  // Append photorealism anchor to every prompt
+  const anchoredPrompt = `${options.prompt}\n\n${PHOTOREALISM_ANCHOR}`;
+
+  // Build the final prompt (with text overlay instructions if provided)
+  const finalPrompt = options.textOverlay
+    ? buildPromptWithText(anchoredPrompt, options.textOverlay)
+    : anchoredPrompt;
+
   // Add the text prompt after the images
-  parts.push({ text: options.prompt });
+  parts.push({ text: finalPrompt });
 
   // Set up timeout with AbortController
   const controller = new AbortController();

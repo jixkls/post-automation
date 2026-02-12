@@ -5,6 +5,8 @@ import { publicProcedure, router } from "./_core/trpc";
 import { geminiRouter } from "./routers/gemini";
 import { postsRouter } from "./routers/posts";
 import { templatesRouter } from "./routers/templates";
+import { creativeEditorRouter } from "./routers/creativeEditor";
+import { creativePipelineRouter } from "./routers/creativePipeline";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -12,6 +14,8 @@ export const appRouter = router({
   gemini: geminiRouter,
   posts: postsRouter,
   templates: templatesRouter,
+  creativeEditor: creativeEditorRouter,
+  creativePipeline: creativePipelineRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
